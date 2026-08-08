@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+
+# Training artifacts — large, regenerable, synced deliberately not incidentally
+checkpoints/
+runs/
+*.pt
+*.ckpt
+
+# Captured game data: screenshots are large and may contain usernames of other
+# players. Tracked selectively — see data/captures/README.md
+data/captures/**
+!data/captures/README.md
+!data/captures/*.yaml

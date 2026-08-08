@@ -1,0 +1,16 @@
+[project]
+name = "pokajan-bot"
+version = "0.1.0"
+description = "A learning agent for Pokajan, the card minigame in Hololive Dreams"
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools.packages.find]
+include = ["pokajan*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "scenario: golden cases pinned to the frozen fixture rules",
+    "invariant: properties that must hold under any valid rules config",
+]

@@ -1,0 +1,13 @@
+# Training-only extras (M5+). Installed on top of requirements.txt.
+#
+# torch is deliberately UNPINNED to a wheel index here: the laptop needs the CPU
+# build, the desktop needs whatever matches its GPU. Install with the right index
+# for the machine, then let scripts/detect_device.py confirm what it picked:
+#
+#   laptop (CPU):   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   desktop (CUDA): pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# Pinning a single build here would break one of the two machines, which is
+# exactly the retrofit the plan set out to avoid.
+torch>=2.5,<3
+numpy==2.2.1

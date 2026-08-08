@@ -1,0 +1,9 @@
+# Core engine + GUI. Everything here runs fine on the laptop, CPU-only.
+PyYAML==6.0.2
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pywebview==5.3.2
+
+# Tests
+pytest==8.3.4
+hypothesis==6.123.2

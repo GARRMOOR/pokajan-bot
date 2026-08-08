@@ -1,0 +1,77 @@
+# FROZEN TEST FIXTURE — DO NOT EDIT.
+#
+# Golden scenario tests are pinned to these exact numbers. When the real rules are
+# corrected, add rules_v2.yaml and new scenarios alongside; this file and the tests
+# that reference it keep passing, which is what proves a rules change did not
+# silently alter behaviour we had already verified.
+#
+# Deliberately small and unlike the real game: six characters, two groups, and
+# payouts chosen so that every ranking case is distinguishable by eye.
+
+version: 1
+name: fixture_v1
+
+deck:
+  size: 40
+  colors: [blue, orange, pink]
+  max_per_color: 3
+  composition: even_as_possible
+
+characters:
+  - {id: a, name: "Alpha"}
+  - {id: b, name: "Bravo"}
+  - {id: c, name: "Charlie"}
+  - {id: d, name: "Delta"}
+  - {id: e, name: "Echo"}
+  - {id: f, name: "Foxtrot"}
+
+groups:
+  - {id: left,  name: "Left",  members: [a, b]}
+  - {id: right, name: "Right", members: [c, d, e, f]}
+
+bonus_character: c
+
+play:
+  players: 4
+  initial_coins: 1000
+  hand_limit: 5
+  deal_size: 5
+  draws_per_turn: 1
+  refill_policy: up_to_limit
+  chain_allowed: true
+  chain_is_optional: true
+  claim_moves_turn: false
+  discard_after_claim: false
+  discard_after_in_turn_call: true
+  claimable: most_recent_discard_only
+
+hands:
+  - {id: triple, predicate: three_of_a_kind}
+  - {id: group,  predicate: full_group}
+
+payouts:
+  base:
+    triple: 100
+    group:
+      2: 50          # deliberately cheaper than a triple, so "group beats triple"
+      3: 200         # is never assumed anywhere in the code
+      4: 400
+  modifiers:
+    monochrome: {mode: multiply, value: 2.0}
+    bonus_card: {mode: multiply, value: 3.0}
+    claimed:    {mode: multiply, value: 1.0}
+  combine: multiplicative
+  rounding: nearest_1
+  payer:
+    when_claimed: discarder
+    otherwise: split_others
+  caller_gains_full_amount_on_payer_bankruptcy: true
+
+end_conditions:
+  deck_empty: true
+  coin_floor: 0
+  floor_is_asymmetric: true
+  multi_round: false
+
+tiebreak:
+  order: [payout, turn_order]

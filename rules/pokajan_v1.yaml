@@ -1,0 +1,142 @@
+# Pokajan rules — v1
+#
+# THIS FILE IS THE ONLY PLACE RULE NUMBERS LIVE. Nothing under pokajan/core/ may
+# define a gameplay constant. Correcting a rule is an edit here plus a retrain,
+# never a refactor.
+#
+# Entries marked "TODO(M2)" are guesses awaiting confirmation by playing a real
+# round. Entries marked "CONFIRMED" have been verified against the real game.
+#
+# Changing anything here changes rules_hash, which invalidates trained
+# checkpoints on purpose — see pokajan/core/rules.py.
+
+version: 1
+name: pokajan_v1
+
+# ---------------------------------------------------------------- deck --------
+deck:
+  size: 100                    # CONFIRMED
+  colors: [blue, orange, pink] # CONFIRMED
+  max_per_color: 3             # CONFIRMED — 3 per (character, colour), so <=9 per character
+
+  # TODO(M2): how 100 cards are distributed over the characters. 15-18 characters
+  # x 9 copies is 135-162 possible cards, so the deck is always a strict subset
+  # and something has to give. This is a genuine unknown and the composition
+  # posterior in envs/belief.py is built to infer it from play regardless.
+  #   even_as_possible - fill evenly across all slots, distributing the remainder
+  #   uniform_random   - sample 100 from the multiset of all legal cards
+  composition: even_as_possible
+
+# ---------------------------------------------------------- characters --------
+# CONFIRMED that groups are revealed at game start and the deck only ever
+# contains characters from them. The specific roster is redrawn every game; this
+# one is the example from the real game used as the development default.
+# Character count observed between 14 and 19, typically 15-18.
+characters:
+  - {id: tokino_sora,    name: "Tokino Sora"}
+  - {id: roboco,         name: "Roboco"}
+  - {id: azki,           name: "AzKi"}
+  - {id: sakura_miko,    name: "Sakura Miko"}
+  - {id: hoshimachi_suisei, name: "Hoshimachi Suisei"}
+  - {id: ookami_mio,     name: "Ookami Mio"}
+  - {id: nekomata_okayu, name: "Nekomata Okayu"}
+  - {id: inugami_korone, name: "Inugami Korone"}
+  - {id: shirakami_fubuki, name: "Shirakami Fubuki"}
+  - {id: moona_hoshinova, name: "Moona Hoshinova"}
+  - {id: ayunda_risu,    name: "Ayunda Risu"}
+  - {id: airani_iofifteen, name: "Airani Iofifteen"}
+  - {id: gawr_gura,      name: "Gawr Gura"}
+  - {id: mori_calliope,  name: "Mori Calliope"}
+  - {id: amelia_watson,  name: "Amelia Watson"}
+  - {id: ninomae_inanis, name: "Ninomae Ina'nis"}
+  - {id: takanashi_kiara, name: "Takanashi Kiara"}
+
+groups:                        # CONFIRMED: always exactly 4 groups
+  - {id: gen0,   name: "Gen 0",     members: [tokino_sora, roboco, azki, sakura_miko, hoshimachi_suisei]}
+  - {id: gamers, name: "Gamers",    members: [ookami_mio, nekomata_okayu, inugami_korone, shirakami_fubuki]}
+  - {id: id1,    name: "ID Gen 1",  members: [moona_hoshinova, ayunda_risu, airani_iofifteen]}
+  - {id: myth,   name: "Myth",      members: [gawr_gura, mori_calliope, amelia_watson, ninomae_inanis, takanashi_kiara]}
+
+# The bonus character is drawn at random from the roster each game and pays extra.
+# null means "pick at random at deal time"; pin an id here for reproducible tests.
+bonus_character: null
+
+# ----------------------------------------------------------- play flow --------
+play:
+  players: 4                        # CONFIRMED
+  initial_coins: 1000               # CONFIRMED
+  hand_limit: 7                     # CONFIRMED
+  deal_size: 7                      # TODO(M2): assumed to equal hand_limit
+  draws_per_turn: 1                 # CONFIRMED — draw 1, discard 1, hand size fixed
+  refill_policy: up_to_limit        # CONFIRMED — after a call, refill back up to hand_limit
+  chain_allowed: true               # CONFIRMED — a refill that completes another hand may be called again, unboundedly
+  chain_is_optional: true           # CONFIRMED by implication — calling is always a choice
+
+  # CONFIRMED: an out-of-turn claim does not move the turn and the claimer does
+  # not discard afterwards. Turn order resumes from the original turn player.
+  claim_moves_turn: false
+  discard_after_claim: false
+
+  # TODO(M2): user believes an in-turn call still ends with a discard, but is not
+  # certain. This is the one flow question left open.
+  discard_after_in_turn_call: true
+
+  # CONFIRMED: only the single most recent discard is claimable, by any player,
+  # out of turn. Once the window closes the card is dead.
+  claimable: most_recent_discard_only
+
+# ------------------------------------------------------------ scoring ---------
+hands:
+  # CONFIRMED: exactly these two shapes. 4-of-a-kind scores nothing beyond the
+  # triple inside it, one card may serve only one call, and only one hand may
+  # score at a time — so scoring is always "the single highest-paying legal call".
+  - {id: triple, predicate: three_of_a_kind}
+  - {id: group,  predicate: full_group}
+
+payouts:
+  # TODO(M2): every number in this block is a placeholder. Real values are being
+  # collected into data/captures/payouts_observed.yaml.
+  #
+  # The placeholders are chosen so a game lasts a plausible number of turns
+  # rather than because they resemble the real ones: ~72 draws are available
+  # after the deal, and a 1000-coin stack should survive several payouts.
+  base:
+    triple: 60                      # TODO(M2)
+    group:                          # TODO(M2): keyed by group size — does a bigger group pay more?
+      3: 60
+      4: 100
+      5: 150
+
+  modifiers:
+    monochrome:  {mode: multiply, value: 2.0}   # TODO(M2): multiplier or flat add?
+    bonus_card:  {mode: multiply, value: 2.0}   # TODO(M2): applies when the bonus character is in the scoring set
+    claimed:     {mode: multiply, value: 1.0}   # TODO(M2): does claiming pay differently from self-drawing?
+  combine: multiplicative
+  rounding: nearest_1
+
+  # CONFIRMED. Who hands over the coins:
+  #   discarder    - the player whose discard was claimed pays the whole amount alone
+  #   split_others - the other three split it evenly
+  payer:
+    when_claimed: discarder
+    otherwise: split_others
+
+  # CONFIRMED, and the reason coins are not conserved. The caller always gains the
+  # full amount; each payer is floored at 0 and pays only what they have. The
+  # shortfall is minted into the game and tracked explicitly so tests can assert
+  # sum(coins) == players * initial_coins + minted.
+  caller_gains_full_amount_on_payer_bankruptcy: true
+
+# -------------------------------------------------------- end of game ---------
+end_conditions:
+  deck_empty: true                  # CONFIRMED — round ends when the deck runs out
+  coin_floor: 0                     # CONFIRMED — round ends when any player reaches <= 0
+  floor_is_asymmetric: true         # CONFIRMED — see caller_gains_full_amount_on_payer_bankruptcy
+  multi_round: false                # CONFIRMED — one round is the whole game
+
+# ---------------------------------------------------------- tiebreak ----------
+# CONFIRMED: when several players claim the same discard, the larger coin payout
+# wins; ties then go to the earliest player in turn order. Hand "strength" is not
+# a separate concept in this game — it is just the payout.
+tiebreak:
+  order: [payout, turn_order]

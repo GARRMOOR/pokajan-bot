@@ -1,0 +1,141 @@
+"""Properties the rules loader must satisfy under any valid config."""
+
+from __future__ import annotations
+
+import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+
+from pokajan.core.rules import HandKind, Payer, Rules, canonical_hash
+from tests.conftest import build_config, rules_configs
+
+pytestmark = pytest.mark.invariant
+
+SETTINGS = settings(
+    max_examples=60,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+
+
+@given(rules_configs())
+@SETTINGS
+def test_generated_configs_load(cfg):
+    rules = Rules.from_dict(cfg)
+    space = rules.cards
+    assert space.n_slots == space.n_chars * space.n_colors
+    assert space.n_groups == 4
+    # Every character sits in exactly one group — the loader rejects orphans, and
+    # overlapping groups would break the "one card, one call" accounting.
+    assert sum(len(m) for m in space.group_members) == space.n_chars
+
+
+@given(rules_configs())
+@SETTINGS
+def test_deck_is_buildable(cfg):
+    rules = Rules.from_dict(cfg)
+    capacity = rules.cards.n_slots * rules.cards.max_per_color
+    assert rules.deck_size <= capacity
+    assert rules.play.deal_size * rules.play.players <= rules.deck_size
+
+
+@given(rules_configs())
+@SETTINGS
+def test_every_group_is_completable(cfg):
+    rules = Rules.from_dict(cfg)
+    for members in rules.cards.group_members:
+        assert 1 <= len(members) <= rules.play.hand_limit
+
+
+@given(rules_configs())
+@SETTINGS
+def test_monochrome_never_pays_less_than_mixed(cfg):
+    """The monochrome bonus is a bonus.
+
+    Stated as an inequality rather than an equality so it survives the real
+    modifier turning out to be a flat add rather than a multiplier.
+    """
+    rules = Rules.from_dict(cfg)
+    plain = rules.payout(HandKind.TRIPLE)
+    mono = rules.payout(HandKind.TRIPLE, monochrome=True)
+    assert mono >= plain
+
+    for members in rules.cards.group_members:
+        size = len(members)
+        assert rules.payout(HandKind.GROUP, group_size=size, monochrome=True) >= rules.payout(
+            HandKind.GROUP, group_size=size
+        )
+
+
+@given(rules_configs())
+@SETTINGS
+def test_payouts_are_positive_integers(cfg):
+    rules = Rules.from_dict(cfg)
+    for mono in (False, True):
+        for bonus in (False, True):
+            for claimed in (False, True):
+                amount = rules.payout(
+                    HandKind.TRIPLE, monochrome=mono, bonus=bonus, claimed=claimed
+                )
+                assert isinstance(amount, int) and amount > 0
+
+
+@given(rules_configs())
+@SETTINGS
+def test_payer_follows_the_claim(cfg):
+    """Confirmed rule: claiming bills the discarder alone, otherwise the rest split."""
+    rules = Rules.from_dict(cfg)
+    assert rules.payer_for(claimed=True) is Payer.DISCARDER
+    assert rules.payer_for(claimed=False) is Payer.SPLIT_OTHERS
+
+
+@given(
+    n_chars=st.integers(min_value=14, max_value=19),
+    reorder=st.booleans(),
+)
+@SETTINGS
+def test_rules_hash_tracks_values_not_layout(n_chars, reorder):
+    """Key order must not change the hash; a payout change must.
+
+    Checkpoints are gated on this hash. If it moved every time the file was
+    reformatted we would retrain for nothing; if it failed to move on a payout
+    edit we would silently evaluate a policy against rules it never saw.
+    """
+    sizes = [n_chars - 3, 1, 1, 1]
+    cfg = build_config(n_chars, sizes)
+    baseline = canonical_hash(cfg)
+
+    if reorder:
+        shuffled = dict(reversed(list(cfg.items())))
+        assert canonical_hash(shuffled) == baseline
+
+    changed = build_config(n_chars, sizes, triple_payout=999)
+    assert canonical_hash(changed) != baseline
+
+
+def test_real_rules_file_loads(real_rules):
+    """The live config must always be loadable — it is edited by hand."""
+    assert real_rules.play.hand_limit == 7
+    assert real_rules.play.players == 4
+    assert real_rules.deck_size == 100
+    assert real_rules.cards.n_groups == 4
+    assert 14 <= real_rules.cards.n_chars <= 19
+    assert len(real_rules.rules_hash) == 64
+
+
+@pytest.mark.parametrize(
+    "mutate,expected",
+    [
+        (lambda c: c["deck"].__setitem__("size", 100_000), "exceeds capacity"),
+        # 8 still fits the deck, so this isolates the hand-limit check rather than
+        # tripping the capacity one first.
+        (lambda c: c["play"].__setitem__("deal_size", 8), "hand_limit"),
+        (lambda c: c["groups"].__setitem__(0, {"id": "g0", "members": []}), "no members"),
+        (lambda c: c["groups"][0]["members"].append("nope"), "not in the roster"),
+    ],
+)
+def test_invalid_configs_are_rejected_with_a_useful_message(mutate, expected):
+    cfg = build_config(16, [5, 4, 3, 4])
+    mutate(cfg)
+    with pytest.raises(ValueError, match=expected):
+        Rules.from_dict(cfg)
