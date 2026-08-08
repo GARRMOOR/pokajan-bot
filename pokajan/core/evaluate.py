@@ -70,10 +70,12 @@ def _selections(counts: Counts, slots: tuple[int, ...], need: int) -> list[tuple
     caps = [counts[s] for s in slots]
 
     def walk(i: int, left: int, taken: list[int]) -> None:
-        if left == 0:
-            out.append(tuple(taken))
-            return
+        # Every colour is visited even once `left` hits zero, so the tuples are
+        # always one entry per colour. Returning early would emit short tuples,
+        # which read fine when zipped but break anything indexing by colour.
         if i == len(slots):
+            if left == 0:
+                out.append(tuple(taken))
             return
         # Take as many as possible from this colour first, so the canonical (first)
         # selection drains the most plentiful colour and preserves singletons —
@@ -92,6 +94,7 @@ def enumerate_calls(
     bonus_character: int | None,
     claimed: bool = False,
     all_selections: bool = False,
+    must_use: int | None = None,
 ) -> list[Call]:
     """Every legal call available from `counts`, highest-paying first.
 
@@ -99,10 +102,21 @@ def enumerate_calls(
     canonical card selection. Pass `all_selections=True` to also get the
     alternative ways of paying for the same hand, which is what an agent wants
     when deciding which copies to spend.
+
+    `must_use` restricts the result to calls that actually spend a given slot. It
+    exists for claims: you may only take someone's discard to complete a hand
+    *with it*. Without this restriction a player sitting on an already-made hand
+    could claim any card at all and score the hand they were supposed to be
+    waiting to call on their own turn.
     """
     space = rules.cards
     n_colors = space.n_colors
     calls: list[Call] = []
+
+    must_char = None if must_use is None else space.slot_char[must_use]
+    must_color = None if must_use is None else space.slot_color[must_use]
+    if must_use is not None and counts[must_use] < 1:
+        return []
 
     def add(kind, payout, cards, mono, bonus, character=None, group=None, color=None):
         calls.append(
@@ -128,11 +142,15 @@ def enumerate_calls(
     for c, held in enumerate(char_totals):
         if held < 3:
             continue
+        if must_char is not None and c != must_char:
+            continue
         slots = space.char_slots[c]
         is_bonus = bonus_character is not None and c == bonus_character
 
         # Monochrome triple: three copies in a single colour.
         mono_colors = [k for k in range(n_colors) if counts[slots[k]] >= 3]
+        if must_color is not None:
+            mono_colors = [k for k in mono_colors if k == must_color]
         for k in mono_colors:
             cards = [0] * len(counts)
             cards[slots[k]] = 3
@@ -146,6 +164,8 @@ def enumerate_calls(
         # spending the same cards as an available monochrome one.
         mixed = _selections(counts, slots, 3)
         mixed = [sel for sel in mixed if max(sel) < 3]
+        if must_color is not None:
+            mixed = [sel for sel in mixed if sel[must_color] >= 1]
         if mixed:
             payout = rules.payout(HandKind.TRIPLE, monochrome=False, bonus=is_bonus, claimed=claimed)
             for sel in (mixed if all_selections else mixed[:1]):
@@ -158,14 +178,19 @@ def enumerate_calls(
     for g, members in enumerate(space.group_members):
         if not all(char_totals[m] >= 1 for m in members):
             continue
+        if must_char is not None and must_char not in members:
+            continue
         size = len(members)
         is_bonus = bonus_character is not None and bonus_character in members
 
         # Monochrome group: every member available in one shared colour.
-        mono_colors = [
+        mono_colors_all = [
             k for k in range(n_colors)
             if all(counts[space.char_slots[m][k]] >= 1 for m in members)
         ]
+        mono_colors = mono_colors_all
+        if must_color is not None:
+            mono_colors = [k for k in mono_colors if k == must_color]
         for k in mono_colors:
             cards = [0] * len(counts)
             for m in members:
@@ -186,6 +211,9 @@ def enumerate_calls(
             [k for k in range(n_colors) if counts[space.char_slots[m][k]] >= 1]
             for m in members
         ]
+        if must_char is not None:
+            # The claimed copy is the one that member contributes.
+            per_member[members.index(must_char)] = [must_color]
         if all_selections:
             choices = product(*per_member)
         else:
@@ -194,7 +222,7 @@ def enumerate_calls(
             choices = [tuple(max(ks, key=lambda k: counts[space.char_slots[m][k]])
                              for m, ks in zip(members, per_member))]
         for combo in choices:
-            if len(set(combo)) == 1 and combo[0] in mono_colors:
+            if len(set(combo)) == 1 and combo[0] in mono_colors_all:
                 continue  # already listed above, and it pays more there
             cards = [0] * len(counts)
             for m, k in zip(members, combo):
@@ -211,6 +239,7 @@ def best_call(
     *,
     bonus_character: int | None,
     claimed: bool = False,
+    must_use: int | None = None,
 ) -> Call | None:
     """The highest-paying legal call, or None if the hand cannot score.
 
@@ -218,8 +247,36 @@ def best_call(
     replays and seeded games reproduce exactly. Real ties between *players* are
     resolved by turn order in the engine, not here.
     """
-    calls = enumerate_calls(rules, counts, bonus_character=bonus_character, claimed=claimed)
+    calls = enumerate_calls(
+        rules, counts, bonus_character=bonus_character, claimed=claimed, must_use=must_use
+    )
     return calls[0] if calls else None
+
+
+def can_call_using(rules: Rules, probe: Counts, slot: int, *, bonus_character: int | None) -> bool:
+    """Could `probe` score a hand that actually spends `slot`?
+
+    This is the claim-eligibility test. `probe` is the seat's hand with the
+    discarded card already added.
+
+    The cheap characterisation: only the discarded card's own character can make
+    use of it, so either that character now has three copies (a triple can be
+    built around the claimed one) or the one group containing it is complete (the
+    claimed copy is the one that member contributes). Anything else scores without
+    the card, which means it is a hand the player must wait to call on their own
+    turn.
+    """
+    space = rules.cards
+    if probe[slot] < 1:
+        return False
+    character = space.slot_char[slot]
+    totals = space.char_totals(probe)
+    if totals[character] >= 3:
+        return True
+    return any(
+        all(totals[m] >= 1 for m in space.group_members[g])
+        for g in space.char_groups[character]
+    )
 
 
 def can_call(rules: Rules, counts: Counts, *, bonus_character: int | None) -> bool:

@@ -23,7 +23,7 @@ from __future__ import annotations
 from enum import IntEnum
 
 from .cards import Counts
-from .evaluate import can_call
+from .evaluate import can_call, can_call_using
 from .rules import Rules
 
 
@@ -81,13 +81,14 @@ def legal_mask(
         return mask
 
     if decision is DecisionType.CLAIM:
-        # Claiming is only offered when the claimed card would genuinely complete
-        # a hand — the engine checks against hand + the discard.
+        # Claiming is only legal to complete a hand *with the claimed card*. A
+        # hand that already scores without it is one you must wait to call on your
+        # own turn — see can_call_using.
         if claimable_slot is None:
             raise ValueError("CLAIM decision requires claimable_slot")
         probe = list(hand)
         probe[claimable_slot] += 1
-        if can_call(rules, probe, bonus_character=bonus_character):
+        if can_call_using(rules, probe, claimable_slot, bonus_character=bonus_character):
             mask[n] = True
         mask[n + 1] = True     # passing is always allowed
         return mask

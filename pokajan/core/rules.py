@@ -84,6 +84,10 @@ class Rules:
     composition: Composition
     bonus_character: int | None      # index into cards.character_ids; None = random per game
     tiebreak_order: tuple[str, ...]
+    # Whether "earliest in play order" counts from the discarder or from seat 0.
+    # The two only ever differ on an exact payout tie. Optional, so the frozen test
+    # fixture stays untouched.
+    tiebreak_from: str
 
     # payout table, pre-resolved into plain numbers at load time
     _base_triple: float
@@ -156,6 +160,7 @@ class Rules:
             composition=Composition(deck["composition"]),
             bonus_character=bonus_idx,
             tiebreak_order=tuple(raw["tiebreak"]["order"]),
+            tiebreak_from=str(raw["tiebreak"].get("turn_order_from", "discarder")),
             _base_triple=float(pay["base"]["triple"]),
             _base_group=base_group,
             _mod_monochrome=(mods["monochrome"]["mode"], float(mods["monochrome"]["value"])),
@@ -237,6 +242,8 @@ class Rules:
             raise ValueError(f"unknown payouts.combine {self._combine!r}")
         if self._rounding not in ("nearest_1", "nearest_10", "floor", "ceil"):
             raise ValueError(f"unknown payouts.rounding {self._rounding!r}")
+        if self.tiebreak_from not in ("discarder", "seat_zero"):
+            raise ValueError(f"unknown tiebreak.turn_order_from {self.tiebreak_from!r}")
 
     # ------------------------------------------------------------ payout ----
     def payout(

@@ -9,13 +9,14 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M0 — core model.** Rules config, card model, hand evaluator, action space, and
-the JSON protocol are in, with 38 tests passing. No engine yet.
+**M1 — playable engine.** Full game logic, an AEC environment, and 68 tests
+passing. Games run end to end: roughly 44 turns and 11 Pokajans under greedy
+self-play, at ~340 games/s single-threaded. No GUI yet.
 
 ```
 M0  core model, protocol, tests            <- done
+M1  engine + environment                   <- done
 M0b capture real payouts + card art        <- in progress (see data/captures/)
-M1  engine + environment
 M2  web GUI, human-playable  <-- rules get validated against the real game here
 M3  observation encoder, belief, heuristic agent
 M4  PIMC agent
@@ -24,6 +25,22 @@ M6  risk-conditioned training
 M7  hint mode + overlay
 M8  screen reading
 ```
+
+### Diagnostics
+
+```powershell
+.\.venv\Scripts\python scripts\smoke.py 500 --greedy   # what a batch of games looks like
+.\.venv\Scripts\python scripts\calibrate_stakes.py     # infer the payout scale from real games
+.\.venv\Scripts\python scripts\detect_device.py        # what this machine will train on
+```
+
+`calibrate_stakes.py` is the one worth running before anything else. Payouts are
+unknown, but they are not free parameters — the ratio of payout to the 1000-coin
+stack decides whether games end by deck exhaustion or by someone going broke, and
+those two regimes play completely differently. So rather than needing exact
+numbers up front, note how your real games *end* and read the scale off the table.
+At the current placeholder of 60, games always end on deck exhaustion; bankruptcy
+only starts appearing around 120 and dominates by 350.
 
 M2 is the gate. No training compute gets spent until a human has played a full
 game here and compared it turn-by-turn with the real thing.

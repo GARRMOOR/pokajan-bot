@@ -140,3 +140,7 @@ end_conditions:
 # a separate concept in this game — it is just the payout.
 tiebreak:
   order: [payout, turn_order]
+  # TODO(M2): "earliest in play order" — counted from the discarder (the mahjong
+  # convention, assumed here) or from seat zero? The two only ever differ when two
+  # players claim the same card for exactly the same payout.
+  turn_order_from: discarder
