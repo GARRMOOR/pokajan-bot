@@ -46,10 +46,10 @@ def build_config(
     deal_size: int = 7,
     players: int = 4,
     deck_size: int = 100,
-    triple_payout: int = 60,
-    group_scale: int = 30,
-    mono_mult: float = 2.0,
-    bonus_mult: float = 2.0,
+    triple_payout: int = 120,
+    group_scale: int = 60,
+    mono_mult: float = 3.0,
+    bonus_per_copy: int = 90,
     bonus_character: str | None = None,
 ) -> dict:
     """A valid rules dict with the given shape."""
@@ -62,8 +62,16 @@ def build_config(
         cursor += size
 
     # An entry for every group size that could exist, so validation passes for any
-    # split the generator produces.
-    group_payouts = {size: group_scale * size for size in range(1, hand_limit + 1)}
+    # split the generator produces. `mono_mult` varies the monochrome premium
+    # across generated configs precisely because the real one is not a constant —
+    # anything asserting a fixed ratio should fail here.
+    group_payouts = {
+        size: {
+            "multi": group_scale * size,
+            "mono": int(group_scale * size * mono_mult),
+        }
+        for size in range(1, hand_limit + 1)
+    }
 
     return {
         "version": 1,
@@ -96,14 +104,18 @@ def build_config(
             {"id": "group", "predicate": "full_group"},
         ],
         "payouts": {
-            "base": {"triple": triple_payout, "group": group_payouts},
-            "modifiers": {
-                "monochrome": {"mode": "multiply", "value": mono_mult},
-                "bonus_card": {"mode": "multiply", "value": bonus_mult},
-                "claimed": {"mode": "multiply", "value": 1.0},
+            "table": {
+                "triple": {
+                    "multi": triple_payout,
+                    # Triples get a much steeper monochrome premium than groups in
+                    # the real game (7x vs ~3x), so the generator reproduces that
+                    # asymmetry rather than a single shared multiplier.
+                    "mono": int(triple_payout * mono_mult * 2),
+                },
+                "group": group_payouts,
             },
-            "combine": "multiplicative",
-            "rounding": "nearest_1",
+            "bonus": {"per_copy": bonus_per_copy, "applies_to": "scoring_set"},
+            "claimed_changes_amount": False,
             "payer": {"when_claimed": "discarder", "otherwise": "split_others"},
             "caller_gains_full_amount_on_payer_bankruptcy": True,
         },
@@ -161,7 +173,7 @@ def rules_configs(draw, min_chars: int = 14, max_chars: int = 19) -> dict:
         hand_limit=hand_limit,
         triple_payout=draw(st.integers(min_value=10, max_value=500)),
         group_scale=draw(st.integers(min_value=5, max_value=200)),
-        mono_mult=draw(st.sampled_from([1.0, 1.5, 2.0, 3.0])),
-        bonus_mult=draw(st.sampled_from([1.0, 2.0, 2.5, 5.0])),
+        mono_mult=draw(st.sampled_from([1.0, 1.5, 2.0, 3.5])),
+        bonus_per_copy=draw(st.integers(min_value=0, max_value=200)),
         bonus_character=None if bonus is None else f"c{bonus}",
     )

@@ -9,15 +9,26 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M1 — playable engine.** Full game logic, an AEC environment, and 68 tests
-passing. Games run end to end: roughly 44 turns and 11 Pokajans under greedy
-self-play, at ~340 games/s single-threaded. No GUI yet.
+**M2 — playable in a browser.** Full game logic, an AEC environment, the confirmed
+payout table, and a web table you can sit down and play, with 80 tests passing.
+Games run roughly 43 turns and 11 Pokajans under greedy self-play, ending 86% on
+deck exhaustion and 14% on bankruptcy.
+
+```powershell
+.\.venv\Scripts\python -m pokajan.server.app     # then open http://127.0.0.1:8000
+```
+
+You take a seat, simple bots take the other three. The point is not the game — it
+is the three panels around it: every payout is shown with the arithmetic that
+produced it, the transcript reads like something you can hold next to a real round
+and check line by line, and the *Still guessing* tab lists the rules we are
+assuming rather than knowing. Play a real round alongside it and those go away.
 
 ```
 M0  core model, protocol, tests            <- done
 M1  engine + environment                   <- done
-M0b capture real payouts + card art        <- in progress (see data/captures/)
-M2  web GUI, human-playable  <-- rules get validated against the real game here
+M2  web GUI, human-playable                <- done
+M0b capture real payouts + card art        <- payouts confirmed; card art still open
 M3  observation encoder, belief, heuristic agent
 M4  PIMC agent
 M5  vectorised env, behaviour cloning, PPO self-play
@@ -30,20 +41,40 @@ M8  screen reading
 
 ```powershell
 .\.venv\Scripts\python scripts\smoke.py 500 --greedy   # what a batch of games looks like
-.\.venv\Scripts\python scripts\calibrate_stakes.py     # infer the payout scale from real games
+.\.venv\Scripts\python scripts\calibrate_stakes.py     # payout sensitivity check
 .\.venv\Scripts\python scripts\detect_device.py        # what this machine will train on
 ```
 
-`calibrate_stakes.py` is the one worth running before anything else. Payouts are
-unknown, but they are not free parameters — the ratio of payout to the 1000-coin
-stack decides whether games end by deck exhaustion or by someone going broke, and
-those two regimes play completely differently. So rather than needing exact
-numbers up front, note how your real games *end* and read the scale off the table.
-At the current placeholder of 60, games always end on deck exhaustion; bankruptcy
-only starts appearing around 120 and dominates by 350.
+`calibrate_stakes.py` re-runs the game with every payout scaled up and down. Two
+uses: confirm the simulated game *length* at 1.0× matches a real round, and see how
+sensitive the endings are to the table being slightly off. Currently bankruptcy runs
+7% → 13% → 28% across 0.8× → 1.0× → 1.25×, so a small error in the table shifts the
+balance noticeably without changing the character of the game.
 
-M2 is the gate. No training compute gets spent until a human has played a full
-game here and compared it turn-by-turn with the real thing.
+M2 is the gate. The table is built; what remains is playing a real round beside it.
+No training compute gets spent until that comparison is done, because a rules error
+found at M6 costs a retrain and one found now costs a YAML edit.
+
+### The one thing still assumed
+
+Everything else has been confirmed against real play. What remains is **which 100
+of the possible cards are in the deck** — and it cannot be resolved by looking.
+
+The game shows a "remaining cards" list, but it counts every card the player has
+not *seen*, drawn from the full theoretical pool of 9 copies per holomem — 153
+cards for a 17-holomem lineup. The deck only ever holds 100. So about a third of
+that list is cards that do not exist in the game at all, and the number it shows is
+not the number of cards left.
+
+**This is where the bot's structural edge comes from.** A human reading that list is
+being confidently misled and has no practical way not to be. Inferring the real
+composition from cards actually observed is not a refinement here; it is the only
+way to know. That is what the composition posterior in `envs/belief.py` is for, and
+`pokajan/vision/` carries a note never to scrape the counter as truth.
+
+Since the underlying rule is unobservable, M5 should train against a *mixture* of
+composition rules rather than committing to one — an agent calibrated to the wrong
+rule would be wrong in exactly the same confident way the in-game counter is.
 
 ## Quick start
 
@@ -84,9 +115,30 @@ a group. Calling it ("Pokajan") collects coins:
 - claimed off another player's discard → **that player alone pays**
 - otherwise → **the other three split it evenly**
 
-All-one-colour hands pay more, as does a hand containing the game's randomly chosen
-bonus character. After scoring, the cards leave your hand, you refill to seven, and
-if the refill completes another hand you may call again — indefinitely.
+After scoring, the cards leave your hand, you refill to seven, and if the refill
+completes another hand you may call again — indefinitely.
+
+### The payout table (confirmed)
+
+|  hand   | multi-colour | single-colour | premium |
+|---------|-------------:|--------------:|--------:|
+| triple  |          120 |           840 |   7.00× |
+| 3-group |          180 |           480 |   2.67× |
+| 4-group |          300 |           840 |   2.80× |
+| 5-group |          480 |          1800 |   3.75× |
+
+Plus **+90 per copy** of the randomly chosen bonus holomem that the hand scores —
+additive, so a triple of the bonus character is +270.
+
+Three things to notice, all of which shaped the code:
+
+- **The monochrome premium is not a constant multiplier**, so payouts are a flat
+  table rather than base × modifier. Nothing may infer one row from another.
+- **A monochrome triple (840) outranks a monochrome 3-group (480)** and ties a
+  monochrome 4-group. Since strength *is* payout, nothing may assume group hands
+  beat triples.
+- **A monochrome 5-group pays 1800, more than the entire starting stack.** Off a
+  discard, that bankrupts the discarder outright and ends the game on the spot.
 
 A discard can be claimed by anyone, out of turn, but only in the instant after it is
 played. An out-of-turn claim does not move the turn and costs you no discard. A hand

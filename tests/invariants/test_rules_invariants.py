@@ -72,12 +72,46 @@ def test_monochrome_never_pays_less_than_mixed(cfg):
 def test_payouts_are_positive_integers(cfg):
     rules = Rules.from_dict(cfg)
     for mono in (False, True):
-        for bonus in (False, True):
-            for claimed in (False, True):
-                amount = rules.payout(
-                    HandKind.TRIPLE, monochrome=mono, bonus=bonus, claimed=claimed
-                )
-                assert isinstance(amount, int) and amount > 0
+        for copies in (0, 1, 3):
+            amount = rules.payout(HandKind.TRIPLE, monochrome=mono, bonus_copies=copies)
+            assert isinstance(amount, int) and amount > 0
+
+
+@given(rules_configs())
+@SETTINGS
+def test_the_bonus_is_additive_per_copy(cfg):
+    """Confirmed: +N per copy of the bonus holomem, not a multiplier.
+
+    So a triple of the bonus character earns it three times over. Asserted as
+    linearity in the copy count, which a multiplicative model could not satisfy.
+    """
+    rules = Rules.from_dict(cfg)
+    base = rules.payout(HandKind.TRIPLE)
+    for copies in (0, 1, 2, 3):
+        assert rules.payout(HandKind.TRIPLE, bonus_copies=copies) == (
+            base + rules.bonus_per_copy * copies
+        )
+
+
+@given(rules_configs())
+@SETTINGS
+def test_nothing_assumes_a_fixed_monochrome_ratio(cfg):
+    """The premium differs per hand shape, so only the ordering may be relied on.
+
+    In the real table it ranges from 2.67x on a three-member group to 7x on a
+    triple. Any code inferring one ratio from another would be wrong.
+    """
+    rules = Rules.from_dict(cfg)
+    triple_ratio = rules.payout(HandKind.TRIPLE, monochrome=True) / rules.payout(
+        HandKind.TRIPLE
+    )
+    assert triple_ratio >= 1.0
+    for members in rules.cards.group_members:
+        size = len(members)
+        ratio = rules.payout(HandKind.GROUP, group_size=size, monochrome=True) / rules.payout(
+            HandKind.GROUP, group_size=size
+        )
+        assert ratio >= 1.0
 
 
 @given(rules_configs())
@@ -111,6 +145,27 @@ def test_rules_hash_tracks_values_not_layout(n_chars, reorder):
 
     changed = build_config(n_chars, sizes, triple_payout=999)
     assert canonical_hash(changed) != baseline
+
+
+def test_every_real_payout_splits_evenly_between_the_other_players(real_rules):
+    """Confirmed: no real payout is indivisible by three.
+
+    Worth pinning rather than treating as coincidence. It means the "who gets the
+    odd coin" question never arises in the real game, and if a future payout row
+    breaks the pattern that is a strong hint the number was transcribed wrong.
+    """
+    payers = real_rules.play.players - 1
+    amounts = []
+    for mono in (False, True):
+        amounts.append(real_rules.payout(HandKind.TRIPLE, monochrome=mono))
+        for members in real_rules.cards.group_members:
+            amounts.append(
+                real_rules.payout(HandKind.GROUP, group_size=len(members), monochrome=mono)
+            )
+    amounts.append(real_rules.bonus_per_copy)
+
+    offenders = [a for a in amounts if a % payers]
+    assert not offenders, f"these do not divide by {payers}: {sorted(set(offenders))}"
 
 
 def test_real_rules_file_loads(real_rules):

@@ -191,8 +191,8 @@ def test_self_drawn_hand_is_split_by_the_other_three(fixture_rules):
 def test_the_bigger_payout_wins_regardless_of_seat_order(fixture_rules):
     """Seat 1 is earlier in order but seat 2's hand pays far more.
 
-    Seat 1 claims a mixed triple of c: 100 x3 bonus = 300.
-    Seat 2 claims the whole 'right' group in blue: 400 x2 mono x3 bonus = 2400.
+    Seat 1 claims a mixed triple of c:            100 + 3x50 bonus  =  250
+    Seat 2 claims the whole 'right' group in blue: 800 mono + 50    =  850
     """
     r = fixture_rules
     engine = rigged(
@@ -211,8 +211,9 @@ def test_the_bigger_payout_wins_regardless_of_seat_order(fixture_rules):
     engine.submit([call(engine, 1), call(engine, 2)])
 
     s = engine.state
-    assert s.coins[2] == 3400, "seat 2 should have won the card"
+    assert s.coins[2] == 1850, "seat 2 should have won the card"
     assert s.coins[1] == 1000, "seat 1 gets nothing for losing the claim"
+    assert s.coins[0] == 150, "the discarder alone pays the winner's 850"
     assert s.calls_made[1] == 0 and s.calls_made[2] == 1
 
 
@@ -345,7 +346,7 @@ def test_an_in_turn_call_still_ends_with_a_discard(fixture_rules):
             [("e", "orange")],
             [("e", "pink")],
         ],
-        deck=[("b", "blue"), ("d", "orange"), ("f", "orange"), ("d", "pink")],
+        deck=[("d", "pink"), ("f", "orange"), ("d", "orange"), ("b", "blue"), ("e", "blue")],
         phase=Phase.AWAIT_IN_TURN_CALL,
     )
     engine.submit(call(engine, 0))
@@ -354,6 +355,57 @@ def test_an_in_turn_call_still_ends_with_a_discard(fixture_rules):
     assert s.phase is Phase.AWAIT_DISCARD
     assert s.current_seat == 0
     assert seats_asked(engine) == [0]
+
+
+def test_an_in_turn_call_does_not_permanently_cost_you_a_card(fixture_rules):
+    """The refill must restore your pre-discard size, not the hand limit.
+
+    Found by a human noticing they were asked to discard while holding seven
+    rather than eight. Refilling flat to the limit and then taking the in-turn
+    discard leaves you on limit-1 — and keeps you there, since every later turn
+    draws back to the limit and discards below it again. One call would quietly
+    cost a card for the rest of the game.
+    """
+    r = fixture_rules
+    limit = r.play.hand_limit
+    engine = rigged(
+        r,
+        hands=[
+            [("a", "blue"), ("a", "orange"), ("a", "pink"), ("f", "blue")],
+            [("e", "blue")],
+            [("e", "orange")],
+            [("e", "pink")],
+        ],
+        deck=[("d", "pink"), ("f", "orange"), ("d", "orange"), ("b", "blue"), ("e", "blue")],
+        phase=Phase.AWAIT_IN_TURN_CALL,
+    )
+    engine.submit(call(engine, 0))
+
+    s = engine.state
+    assert s.phase is Phase.AWAIT_DISCARD
+    assert s.hand_size(0) == limit + 1, "should hold one over the limit, owing a discard"
+
+    engine.submit(discard(engine, 0, "f", "blue"))
+    assert s.hand_size(0) == limit, "and land exactly on the limit once discarded"
+
+
+def test_a_claim_refills_only_to_the_limit(fixture_rules):
+    """The other side of the same rule: no discard owed, so no extra card."""
+    r = fixture_rules
+    engine = rigged(
+        r,
+        hands=[
+            [("a", "blue"), ("f", "pink")],
+            [("e", "blue")],
+            [("a", "orange"), ("a", "pink")],
+            [("e", "orange")],
+        ],
+        deck=[("b", "blue")] * 12,
+    )
+    engine.submit(discard(engine, 0, "a", "blue"))
+    engine.submit(call(engine, 2))
+
+    assert engine.state.hand_size(2) == r.play.hand_limit
 
 
 def test_a_made_hand_cannot_be_called_on_someone_elses_turn(fixture_rules):
@@ -430,7 +482,7 @@ def test_a_refill_that_completes_another_hand_offers_a_second_call(fixture_rules
             [("e", "pink")],
         ],
         # Drawn from the end: b-pink first, completing a second triple.
-        deck=[("f", "blue"), ("d", "orange"), ("b", "pink")],
+        deck=[("f", "blue"), ("d", "orange"), ("e", "pink"), ("b", "pink")],
         phase=Phase.AWAIT_IN_TURN_CALL,
     )
     engine.submit(call(engine, 0))
@@ -455,7 +507,7 @@ def test_a_chain_may_be_declined(fixture_rules):
             [("e", "orange")],
             [("e", "pink")],
         ],
-        deck=[("f", "blue"), ("d", "orange"), ("b", "pink")],
+        deck=[("f", "blue"), ("d", "orange"), ("e", "pink"), ("b", "pink")],
         phase=Phase.AWAIT_IN_TURN_CALL,
     )
     engine.submit(call(engine, 0))

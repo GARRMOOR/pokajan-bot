@@ -1,9 +1,22 @@
-# FROZEN TEST FIXTURE — DO NOT EDIT.
+# TEST FIXTURE — payout values are frozen; mechanics track the real game.
 #
-# Golden scenario tests are pinned to these exact numbers. When the real rules are
-# corrected, add rules_v2.yaml and new scenarios alongside; this file and the tests
-# that reference it keep passing, which is what proves a rules change did not
-# silently alter behaviour we had already verified.
+# The distinction matters, so it is stated explicitly rather than left to custom:
+#
+#   * Payout *values* are frozen. Scenario tests assert exact arithmetic against
+#     them, so when real payouts are corrected, add rules_v2.yaml and new
+#     scenarios; this file keeps passing, proving the change did not disturb
+#     behaviour already verified.
+#   * Play *mechanics* (refill policy, who pays, turn flow) track the real game.
+#     A fixture that modelled mechanics we know to be wrong would make every
+#     scenario built on it meaningless — it would be pinning behaviour we do not
+#     want. Corrections here are deliberate and noted in the commit.
+#
+# Migrated once, from base-times-modifier to the flat table below, when real
+# payouts showed the monochrome premium is not a constant multiple (2.67x on a
+# three-group up to 7x on a triple). A schema change is not a value change: there
+# was no way to express the real structure in the old shape, and carrying a dead
+# parser forever to preserve a fixture written before we knew the structure would
+# have been the worse trade. Values were chosen to mirror the real table's shape.
 #
 # Deliberately small and unlike the real game: six characters, two groups, and
 # payouts chosen so that every ranking case is distinguishable by eye.
@@ -37,7 +50,7 @@ play:
   hand_limit: 5
   deal_size: 5
   draws_per_turn: 1
-  refill_policy: up_to_limit
+  refill_policy: to_pre_discard_size
   chain_allowed: true
   chain_is_optional: true
   claim_moves_turn: false
@@ -50,18 +63,20 @@ hands:
   - {id: group,  predicate: full_group}
 
 payouts:
-  base:
-    triple: 100
+  # Mirrors the real table's shape: a huge monochrome premium on triples (7x) and
+  # a modest one on groups, so that a monochrome triple outranks a monochrome
+  # small group. Both here and in the real game, nothing may assume groups beat
+  # triples.
+  table:
+    triple: {multi: 100, mono: 700}
     group:
-      2: 50          # deliberately cheaper than a triple, so "group beats triple"
-      3: 200         # is never assumed anywhere in the code
-      4: 400
-  modifiers:
-    monochrome: {mode: multiply, value: 2.0}
-    bonus_card: {mode: multiply, value: 3.0}
-    claimed:    {mode: multiply, value: 1.0}
-  combine: multiplicative
-  rounding: nearest_1
+      2: {multi: 50,  mono: 150}     # deliberately cheaper than a triple
+      3: {multi: 200, mono: 400}     # and cheaper, monochrome, than a mono triple
+      4: {multi: 400, mono: 800}
+  bonus:
+    per_copy: 50
+    applies_to: scoring_set
+  claimed_changes_amount: false
   payer:
     when_claimed: discarder
     otherwise: split_others

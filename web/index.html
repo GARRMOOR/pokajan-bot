@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pokajan — rules validation table</title>
+<style>
+  :root {
+    --bg: #10131a;
+    --panel: #171b25;
+    --panel-2: #1e2431;
+    --line: #2b3243;
+    --text: #e6e9f0;
+    --dim: #8b93a7;
+    --accent: #7dd3fc;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --blue: #3b82f6;
+    --orange: #f97316;
+    --pink: #ec4899;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  }
+  .app { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--panel);
+          display: flex; flex-direction: column; overflow: hidden; }
+
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .meta { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+  header .spacer { flex: 1; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: #1d4ed8; border-color: #2563eb; }
+  button.danger  { background: #7f1d1d; border-color: #991b1b; }
+
+  .seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 14px 16px; }
+  .seat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  }
+  .seat.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .seat.you .name { color: var(--accent); }
+  .seat .name { font-weight: 650; font-size: 13px; }
+  .seat .coins { font-size: 20px; font-family: ui-monospace, monospace; margin: 2px 0; }
+  .seat .sub { color: var(--dim); font-size: 11px; font-family: ui-monospace, monospace; }
+  .seat .recent { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
+
+  .table-area {
+    flex: 1; overflow-y: auto; padding: 0 16px 16px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .row { display: flex; gap: 14px; align-items: flex-start; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .box h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+
+  .card {
+    display: inline-flex; flex-direction: column; justify-content: space-between;
+    min-width: 88px; height: 66px; padding: 6px 8px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel-2);
+    cursor: default; position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 4px;
+  }
+  .card.blue::before   { background: var(--blue); }
+  .card.orange::before { background: var(--orange); }
+  .card.pink::before   { background: var(--pink); }
+  .card .who { font-size: 12px; font-weight: 600; line-height: 1.25; padding-left: 4px; }
+  .card .tag { font-size: 10px; color: var(--dim); padding-left: 4px; font-family: ui-monospace, monospace; }
+  .card.bonus { border-color: var(--warn); }
+  .card.bonus .who::after { content: " ★"; color: var(--warn); }
+  .card.clickable { cursor: pointer; }
+  .card.clickable:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card.mini { min-width: 0; height: auto; padding: 2px 5px 2px 8px; }
+  .card.mini .who { font-size: 10px; padding-left: 0; }
+
+  .hand { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .prompt {
+    background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 12px 14px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .prompt.waiting { border-color: var(--line); }
+  .prompt .what { font-weight: 600; }
+  .prompt .why { color: var(--dim); font-size: 12px; }
+  .payout-chip {
+    font-family: ui-monospace, monospace; background: #14532d; border: 1px solid var(--good);
+    color: var(--good); border-radius: 6px; padding: 3px 8px; font-size: 13px;
+  }
+
+  table.payouts { border-collapse: collapse; font-family: ui-monospace, monospace; font-size: 12px; }
+  table.payouts th, table.payouts td { padding: 3px 10px 3px 0; text-align: right; }
+  table.payouts th:first-child, table.payouts td:first-child { text-align: left; }
+  table.payouts th { color: var(--dim); font-weight: 500; }
+
+  .log { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 12.5px; }
+  .log .e { padding: 4px 0; border-bottom: 1px solid #20263300; }
+  .log .e + .e { border-top: 1px solid #232937; }
+  .log .turn { color: var(--dim); font-family: ui-monospace, monospace; font-size: 11px; }
+  .log .pokajan { color: var(--good); font-weight: 600; }
+  .log .payment { color: var(--text); }
+  .log .minted { color: var(--warn); }
+  .log .over { color: var(--bad); font-weight: 600; }
+  .log .muted { color: var(--dim); }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button {
+    flex: 1; border: 0; border-radius: 0; background: transparent; color: var(--dim);
+    padding: 9px 0; border-bottom: 2px solid transparent;
+  }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+  .pane { display: none; flex: 1; overflow-y: auto; }
+  .pane.on { display: block; }
+
+  .q { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .q .t { font-size: 12.5px; }
+  .q .c { color: var(--dim); font-size: 11.5px; margin-top: 4px; }
+  .impact { font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+            padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
+  .impact.high { background: #7f1d1d; color: #fecaca; }
+  .impact.medium { background: #78350f; color: #fde68a; }
+  .impact.low { background: #1e3a5f; color: #bfdbfe; }
+
+  /* The play-by-play line. Bot seats used to resolve between one render and the
+     next, which made the game impossible to follow — events are now revealed one
+     at a time and narrated here. */
+  .ticker {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 14px;
+    font-size: 14px; min-height: 44px;
+  }
+  .ticker .spacer { flex: 1; }
+  .ticker.pokajan { border-left-color: var(--good); }
+  .ticker.minted, .ticker.over { border-left-color: var(--warn); }
+
+  /* A card that just arrived in your hand. */
+  .card.fresh { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .card.fresh::after {
+    content: "new"; position: absolute; top: 3px; right: 5px;
+    font-size: 9px; color: var(--accent); letter-spacing: .5px;
+  }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit;
+  }
+
+  .scrub { display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+           border-top: 1px solid var(--line); background: var(--panel); }
+  .scrub input[type=range] { flex: 1; }
+  .scrub .pos { font-family: ui-monospace, monospace; color: var(--dim); font-size: 12px; min-width: 92px; }
+  .banner { background: #422006; border: 1px solid var(--warn); color: #fde68a;
+            padding: 6px 16px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="main">
+    <header>
+      <h1>Pokajan</h1>
+      <span class="meta" id="meta"></span>
+      <span class="spacer"></span>
+      <label class="why" for="speed">Pace</label>
+      <select id="speed">
+        <option value="1100">Slow</option>
+        <option value="650" selected>Normal</option>
+        <option value="300">Fast</option>
+        <option value="0">Instant</option>
+      </select>
+      <button id="newgame">New game</button>
+    </header>
+    <div id="replay-banner" class="banner" style="display:none">
+      Viewing history — this is a past position, not the live game.
+    </div>
+    <div class="seats" id="seats"></div>
+    <div class="table-area">
+      <div id="ticker" class="ticker" style="display:none">
+        <span id="ticker-text"></span>
+        <span class="spacer"></span>
+        <button id="skip">Skip ▶▶</button>
+      </div>
+      <div id="prompt" class="prompt waiting">connecting…</div>
+      <div class="box">
+        <h2>Your hand</h2>
+        <div class="hand" id="hand"></div>
+      </div>
+      <div class="row">
+        <div class="box" style="flex:1">
+          <h2>Last discard</h2>
+          <div id="last-discard"></div>
+        </div>
+        <div class="box" style="flex:2">
+          <h2>Table — discarded and dead</h2>
+          <div class="hand" id="table-cards"></div>
+        </div>
+      </div>
+      <div class="box">
+        <h2>Payout table — compare these against the real game</h2>
+        <div id="payouts"></div>
+      </div>
+    </div>
+    <div class="scrub">
+      <button id="live">Live</button>
+      <input type="range" id="slider" min="0" max="0" value="0">
+      <span class="pos" id="pos"></span>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="tabs">
+      <button class="on" data-pane="log">Transcript</button>
+      <button data-pane="questions">Still guessing</button>
+    </div>
+    <div class="pane on" id="pane-log"><div class="log" id="log"></div></div>
+    <div class="pane" id="pane-questions"><div id="questions"></div></div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
