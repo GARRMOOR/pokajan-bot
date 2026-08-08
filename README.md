@@ -9,16 +9,26 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M1 — playable engine, with the real payout table.** Full game logic, an AEC
-environment, and 72 tests passing. Games run end to end: roughly 43 turns and 11
-Pokajans under greedy self-play, ending 86% on deck exhaustion and 14% on
-bankruptcy. No GUI yet.
+**M2 — playable in a browser.** Full game logic, an AEC environment, the confirmed
+payout table, and a web table you can sit down and play, with 80 tests passing.
+Games run roughly 43 turns and 11 Pokajans under greedy self-play, ending 86% on
+deck exhaustion and 14% on bankruptcy.
+
+```powershell
+.\.venv\Scripts\python -m pokajan.server.app     # then open http://127.0.0.1:8000
+```
+
+You take a seat, simple bots take the other three. The point is not the game — it
+is the three panels around it: every payout is shown with the arithmetic that
+produced it, the transcript reads like something you can hold next to a real round
+and check line by line, and the *Still guessing* tab lists the rules we are
+assuming rather than knowing. Play a real round alongside it and those go away.
 
 ```
 M0  core model, protocol, tests            <- done
 M1  engine + environment                   <- done
-M0b capture real payouts + card art        <- in progress (see data/captures/)
-M2  web GUI, human-playable  <-- rules get validated against the real game here
+M2  web GUI, human-playable                <- done
+M0b capture real payouts + card art        <- payouts confirmed; card art still open
 M3  observation encoder, belief, heuristic agent
 M4  PIMC agent
 M5  vectorised env, behaviour cloning, PPO self-play
@@ -41,8 +51,27 @@ sensitive the endings are to the table being slightly off. Currently bankruptcy 
 7% → 13% → 28% across 0.8× → 1.0× → 1.25×, so a small error in the table shifts the
 balance noticeably without changing the character of the game.
 
-M2 is the gate. No training compute gets spent until a human has played a full
-game here and compared it turn-by-turn with the real thing.
+M2 is the gate. The table is built; what remains is playing a real round beside it.
+No training compute gets spent until that comparison is done, because a rules error
+found at M6 costs a retrain and one found now costs a YAML edit.
+
+### What is still assumed
+
+Listed in the *Still guessing* tab in the app, and as `TODO(M2)` markers in
+`rules/pokajan_v1.yaml`:
+
+| assumption | how to check it | matters |
+|---|---|---|
+| deck is 100 cards spread as evenly as possible over the slots | does the game show remaining counts anywhere? | **high** |
+| calling on your own turn still ends with a discard | call in turn, see if you are asked to discard | medium |
+| opening hand is 7, same as the limit | count your cards at the deal | low |
+| indivisible splits round to the earliest payers | self-draw a 120 or 480; do all three pay equally? | low |
+| payout ties break from the discarder | only matters on an exact tie | low |
+
+Deck composition is the one worth real attention. It drives the whole belief model,
+and it is the one thing that cannot be read off a rulebook. If the game does not
+expose it, that is fine — the belief model is built to infer it from play — but if
+it *does*, that is a meaningful edge.
 
 ## Quick start
 

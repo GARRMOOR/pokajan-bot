@@ -123,6 +123,13 @@ class GameState:
 
     rng: random.Random = field(default_factory=random.Random)
 
+    # A readable transcript of what happened, for the GUI and replay viewer. Off
+    # by default: training runs tens of millions of steps and does not want the
+    # per-event dict allocations, while a human comparing a game against the real
+    # thing needs exactly this.
+    record_events: bool = False
+    events: list[dict] = field(default_factory=list)
+
     # ---------------------------------------------------------------- misc --
     @property
     def players(self) -> int:
@@ -169,6 +176,8 @@ class GameState:
             claim_eligible=self.claim_eligible[:],
             claim_responses=dict(self.claim_responses),
             rng=random.Random(),
+            record_events=self.record_events,
+            events=self.events[:],
         )
         copy.rng.setstate(self.rng.getstate())
         return copy

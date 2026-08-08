@@ -35,6 +35,18 @@ class Engine:
         self.state = state
 
     # ------------------------------------------------------------- setup ----
+    def _event(self, kind: str, **data) -> None:
+        """Append to the transcript, when one is being kept.
+
+        The flag check rather than an unconditional append is deliberate: this is
+        called several times per decision, and training does tens of millions of
+        them without ever reading the result.
+        """
+        if self.state.record_events:
+            self.state.events.append(
+                {"turn": self.state.turn_index, "kind": kind, **data}
+            )
+
     @classmethod
     def new_game(
         cls,
@@ -43,6 +55,7 @@ class Engine:
         seed: int | None = None,
         game_id: str | None = None,
         bonus_character: int | None = None,
+        record_events: bool = False,
     ) -> "Engine":
         rng = random.Random(seed)
         players = rules.play.players
@@ -67,8 +80,10 @@ class Engine:
             coins_won=[0] * players,
             coins_paid=[0] * players,
             rng=rng,
+            record_events=record_events,
         )
         engine = cls(state)
+        engine._event("deal", bonus_character=bonus_character, deck_size=len(state.deck))
         engine._deal()
         return engine
 
@@ -213,6 +228,7 @@ class Engine:
         del s.recent_discards[seat][RECENT_DISCARDS_KEPT:]
         s.last_discard_slot = slot
         s.last_discard_seat = seat
+        self._event("discard", seat=seat, slot=slot, card=s.rules.cards.describe_slot(slot))
         self._open_claim_window(seat, slot)
 
     # ------------------------------------------------------------ claims ----
@@ -274,14 +290,25 @@ class Engine:
             if call is not None and call.payout > best_payout:
                 winner, best_payout = seat, call.payout
 
+        contenders = [seat for seat in s.claim_eligible if s.claim_responses.get(seat) == call_id]
         s.claim_eligible = []
         s.claim_responses = {}
 
         if winner is None:
             # Nobody wanted it; the card stays on the table, now unclaimable.
+            self._event("claim_passed", slot=slot, card=s.rules.cards.describe_slot(slot))
             self._advance_turn()
             return
 
+        self._event(
+            "claim_won",
+            seat=winner,
+            slot=slot,
+            card=s.rules.cards.describe_slot(slot),
+            from_seat=s.last_discard_seat,
+            contenders=contenders,
+            payout=best_payout,
+        )
         s.table[slot] -= 1
         s.hands[winner][slot] += 1
         self._start_chain(winner, from_claim=True, claimed_slot=slot)
@@ -324,6 +351,22 @@ class Engine:
                 s.hands[seat][slot] -= spend
                 s.scored[slot] += spend
         s.calls_made[seat] += 1
+        self._event(
+            "pokajan",
+            seat=seat,
+            claimed=claimed,
+            payout=call.payout,
+            hand_kind=call.kind.value,
+            monochrome=call.monochrome,
+            bonus_copies=call.bonus_copies,
+            group_size=None if call.group is None else len(s.rules.cards.group_members[call.group]),
+            label=call.describe(s.rules.cards),
+            cards=[
+                s.rules.cards.describe_slot(i)
+                for i, n in enumerate(call.cards)
+                for _ in range(n)
+            ],
+        )
 
         self._pay(seat, call.payout, claimed=claimed)
         if s.finished:
@@ -331,7 +374,10 @@ class Engine:
 
         # Every refill drains the shared deck, which is why chaining is a choice:
         # a long chain can run the deck dry and end the game.
+        before = sum(s.hands[seat])
         self._refill(seat)
+        self._event("refill", seat=seat, drawn=sum(s.hands[seat]) - before,
+                    deck_remaining=len(s.deck))
         if s.finished:
             return
 
@@ -380,15 +426,27 @@ class Engine:
         owed = [share + (1 if i < remainder else 0) for i in range(len(payers))]
 
         collected = 0
+        breakdown = []
         for payer, due in zip(payers, owed):
             paid = min(due, s.coins[payer])
             s.coins[payer] -= paid
             s.coins_paid[payer] += paid
             collected += paid
+            breakdown.append({"seat": payer, "owed": due, "paid": paid})
 
         s.coins[winner] += amount
         s.coins_won[winner] += amount
-        s.coins_minted += amount - collected
+        minted = amount - collected
+        s.coins_minted += minted
+
+        self._event(
+            "payment",
+            to_seat=winner,
+            amount=amount,
+            payers=breakdown,
+            minted=minted,
+            coins=s.coins[:],
+        )
 
         floor = s.rules.end.coin_floor
         if any(c <= floor for c in s.coins):
@@ -396,6 +454,13 @@ class Engine:
 
     def _finish(self, reason: EndReason) -> None:
         s = self.state
+        self._event(
+            "game_over",
+            reason=reason.value,
+            coins=s.coins[:],
+            standings=sorted(range(s.players), key=lambda seat: (-s.coins[seat], seat)),
+            minted=s.coins_minted,
+        )
         s.finished = True
         s.end_reason = reason.value
         s.phase = Phase.FINISHED
