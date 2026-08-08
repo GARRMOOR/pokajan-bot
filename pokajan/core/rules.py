@@ -89,14 +89,16 @@ class Rules:
     # fixture stays untouched.
     tiebreak_from: str
 
-    # payout table, pre-resolved into plain numbers at load time
-    _base_triple: float
-    _base_group: dict[int, float]
-    _mod_monochrome: tuple[str, float]
-    _mod_bonus: tuple[str, float]
-    _mod_claimed: tuple[str, float]
-    _combine: str
-    _rounding: str
+    # Payout table, pre-resolved at load time. A flat (shape, monochrome) -> coins
+    # lookup rather than a base with modifiers, because the real monochrome
+    # premium is not a constant multiple: it runs from 2.67x on a three-member
+    # group to 7x on a triple. Modelling it as base x multiplier would need a
+    # different multiplier per row, which is just this table wearing a disguise.
+    _table_triple: tuple[int, int]              # (multi, mono)
+    _table_group: dict[int, tuple[int, int]]    # group size -> (multi, mono)
+    bonus_per_copy: int
+    bonus_applies_to: str                       # scoring_set | whole_hand
+    claimed_changes_amount: bool
     _payer_when_claimed: Payer
     _payer_otherwise: Payer
     caller_gains_full_amount_on_payer_bankruptcy: bool
@@ -126,8 +128,13 @@ class Rules:
         bonus = raw.get("bonus_character")
         bonus_idx = cards.char_index(bonus) if bonus is not None else None
 
-        base_group = {int(k): float(v) for k, v in pay["base"]["group"].items()}
-        mods = pay["modifiers"]
+        table = pay["table"]
+        table_triple = (int(table["triple"]["multi"]), int(table["triple"]["mono"]))
+        table_group = {
+            int(size): (int(row["multi"]), int(row["mono"]))
+            for size, row in table["group"].items()
+        }
+        bonus_cfg = pay.get("bonus", {})
 
         rules = cls(
             version=int(raw["version"]),
@@ -161,13 +168,11 @@ class Rules:
             bonus_character=bonus_idx,
             tiebreak_order=tuple(raw["tiebreak"]["order"]),
             tiebreak_from=str(raw["tiebreak"].get("turn_order_from", "discarder")),
-            _base_triple=float(pay["base"]["triple"]),
-            _base_group=base_group,
-            _mod_monochrome=(mods["monochrome"]["mode"], float(mods["monochrome"]["value"])),
-            _mod_bonus=(mods["bonus_card"]["mode"], float(mods["bonus_card"]["value"])),
-            _mod_claimed=(mods["claimed"]["mode"], float(mods["claimed"]["value"])),
-            _combine=str(pay["combine"]),
-            _rounding=str(pay["rounding"]),
+            _table_triple=table_triple,
+            _table_group=table_group,
+            bonus_per_copy=int(bonus_cfg.get("per_copy", 0)),
+            bonus_applies_to=str(bonus_cfg.get("applies_to", "scoring_set")),
+            claimed_changes_amount=bool(pay.get("claimed_changes_amount", False)),
             _payer_when_claimed=Payer(pay["payer"]["when_claimed"]),
             _payer_otherwise=Payer(pay["payer"]["otherwise"]),
             caller_gains_full_amount_on_payer_bankruptcy=bool(
@@ -225,11 +230,15 @@ class Rules:
                     f"group {c.group_ids[gi]!r} has {len(members)} members but the hand "
                     f"limit is {self.play.hand_limit} — it could never be completed"
                 )
-            if len(members) not in self._base_group:
+            if len(members) not in self._table_group:
+                # Deliberately fatal rather than extrapolated. Every group size in
+                # the payout table came from an observed game; inventing a payout
+                # for an unseen size would train the agent on fiction.
                 raise ValueError(
                     f"group {c.group_ids[gi]!r} has size {len(members)} but "
-                    f"payouts.base.group has no entry for that size "
-                    f"(has {sorted(self._base_group)})"
+                    f"payouts.table.group has no entry for that size "
+                    f"(has {sorted(self._table_group)}). Observe one in a real "
+                    f"game and add the row."
                 )
 
         ungrouped = [
@@ -238,10 +247,8 @@ class Rules:
         if ungrouped:
             raise ValueError(f"characters belong to no group: {ungrouped}")
 
-        if self._combine not in ("multiplicative", "additive"):
-            raise ValueError(f"unknown payouts.combine {self._combine!r}")
-        if self._rounding not in ("nearest_1", "nearest_10", "floor", "ceil"):
-            raise ValueError(f"unknown payouts.rounding {self._rounding!r}")
+        if self.bonus_applies_to not in ("scoring_set", "whole_hand"):
+            raise ValueError(f"unknown payouts.bonus.applies_to {self.bonus_applies_to!r}")
         if self.tiebreak_from not in ("discarder", "seat_zero"):
             raise ValueError(f"unknown tiebreak.turn_order_from {self.tiebreak_from!r}")
 
@@ -252,45 +259,26 @@ class Rules:
         *,
         group_size: int | None = None,
         monochrome: bool = False,
-        bonus: bool = False,
-        claimed: bool = False,
+        bonus_copies: int = 0,
     ) -> int:
         """Coins the caller gains for one scored hand.
 
         This is also the hand's *strength*: the confirmed tiebreak is by payout,
         so there is no separate ranking notion anywhere in the codebase.
+
+        `claimed` is deliberately not a parameter. The observed table has one
+        amount per hand shape, so claiming and self-drawing are worth the same;
+        only `payer_for` differs.
         """
         if kind is HandKind.TRIPLE:
-            amount = self._base_triple
+            multi, mono = self._table_triple
         else:
             if group_size is None:
                 raise ValueError("group_size is required for group hands")
-            amount = self._base_group[group_size]
+            multi, mono = self._table_group[group_size]
 
-        for active, (mode, value) in (
-            (monochrome, self._mod_monochrome),
-            (bonus, self._mod_bonus),
-            (claimed, self._mod_claimed),
-        ):
-            if not active:
-                continue
-            if mode == "multiply":
-                amount = amount * value if self._combine == "multiplicative" else amount + (amount * (value - 1.0))
-            elif mode == "add":
-                amount += value
-            else:
-                raise ValueError(f"unknown modifier mode {mode!r}")
-
-        return self._round(amount)
-
-    def _round(self, amount: float) -> int:
-        if self._rounding == "nearest_1":
-            return int(amount + 0.5)
-        if self._rounding == "nearest_10":
-            return int(round(amount / 10.0)) * 10
-        if self._rounding == "floor":
-            return int(amount)
-        return -int(-amount // 1)  # ceil
+        amount = mono if monochrome else multi
+        return amount + self.bonus_per_copy * bonus_copies
 
     def payer_for(self, claimed: bool) -> Payer:
         return self._payer_when_claimed if claimed else self._payer_otherwise

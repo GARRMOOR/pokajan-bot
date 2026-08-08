@@ -9,9 +9,10 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M1 — playable engine.** Full game logic, an AEC environment, and 68 tests
-passing. Games run end to end: roughly 44 turns and 11 Pokajans under greedy
-self-play, at ~340 games/s single-threaded. No GUI yet.
+**M1 — playable engine, with the real payout table.** Full game logic, an AEC
+environment, and 72 tests passing. Games run end to end: roughly 43 turns and 11
+Pokajans under greedy self-play, ending 86% on deck exhaustion and 14% on
+bankruptcy. No GUI yet.
 
 ```
 M0  core model, protocol, tests            <- done
@@ -30,17 +31,15 @@ M8  screen reading
 
 ```powershell
 .\.venv\Scripts\python scripts\smoke.py 500 --greedy   # what a batch of games looks like
-.\.venv\Scripts\python scripts\calibrate_stakes.py     # infer the payout scale from real games
+.\.venv\Scripts\python scripts\calibrate_stakes.py     # payout sensitivity check
 .\.venv\Scripts\python scripts\detect_device.py        # what this machine will train on
 ```
 
-`calibrate_stakes.py` is the one worth running before anything else. Payouts are
-unknown, but they are not free parameters — the ratio of payout to the 1000-coin
-stack decides whether games end by deck exhaustion or by someone going broke, and
-those two regimes play completely differently. So rather than needing exact
-numbers up front, note how your real games *end* and read the scale off the table.
-At the current placeholder of 60, games always end on deck exhaustion; bankruptcy
-only starts appearing around 120 and dominates by 350.
+`calibrate_stakes.py` re-runs the game with every payout scaled up and down. Two
+uses: confirm the simulated game *length* at 1.0× matches a real round, and see how
+sensitive the endings are to the table being slightly off. Currently bankruptcy runs
+7% → 13% → 28% across 0.8× → 1.0× → 1.25×, so a small error in the table shifts the
+balance noticeably without changing the character of the game.
 
 M2 is the gate. No training compute gets spent until a human has played a full
 game here and compared it turn-by-turn with the real thing.
@@ -84,9 +83,30 @@ a group. Calling it ("Pokajan") collects coins:
 - claimed off another player's discard → **that player alone pays**
 - otherwise → **the other three split it evenly**
 
-All-one-colour hands pay more, as does a hand containing the game's randomly chosen
-bonus character. After scoring, the cards leave your hand, you refill to seven, and
-if the refill completes another hand you may call again — indefinitely.
+After scoring, the cards leave your hand, you refill to seven, and if the refill
+completes another hand you may call again — indefinitely.
+
+### The payout table (confirmed)
+
+|  hand   | multi-colour | single-colour | premium |
+|---------|-------------:|--------------:|--------:|
+| triple  |          120 |           840 |   7.00× |
+| 3-group |          180 |           480 |   2.67× |
+| 4-group |          300 |           840 |   2.80× |
+| 5-group |          480 |          1800 |   3.75× |
+
+Plus **+90 per copy** of the randomly chosen bonus holomem that the hand scores —
+additive, so a triple of the bonus character is +270.
+
+Three things to notice, all of which shaped the code:
+
+- **The monochrome premium is not a constant multiplier**, so payouts are a flat
+  table rather than base × modifier. Nothing may infer one row from another.
+- **A monochrome triple (840) outranks a monochrome 3-group (480)** and ties a
+  monochrome 4-group. Since strength *is* payout, nothing may assume group hands
+  beat triples.
+- **A monochrome 5-group pays 1800, more than the entire starting stack.** Off a
+  discard, that bankrupts the discarder outright and ends the game on the spot.
 
 A discard can be claimed by anyone, out of turn, but only in the instant after it is
 played. An out-of-turn claim does not move the turn and costs you no discard. A hand

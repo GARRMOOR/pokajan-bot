@@ -4,15 +4,23 @@ Fixture recap (tests/fixtures/rules_v1.yaml), so the expected numbers below can 
 checked by hand:
 
     characters   a b c d e f          colours  blue orange pink
-    groups       left  = {a, b}       right = {c, d, e, f}
-    bonus        c
-    triple       100
-    group        size 2 -> 50,  size 3 -> 200,  size 4 -> 400
-    monochrome   x2      bonus x3     (multiplicative)
+    groups       left = {a, b}        right = {c, d, e, f}
+    bonus        c, worth +50 per copy actually scored
 
-Note the deliberately awkward choice that a two-member group pays *less* than a
-triple. Nothing in the engine may assume groups outrank triples; the tiebreak is
-by payout and nothing else, and these tests are what hold that line.
+                       multi   mono
+        triple           100    700
+        2-group           50    150
+        3-group          200    400
+        4-group          400    800
+
+Two deliberately awkward properties, both mirroring the real payout table. A
+two-member group pays *less* than a triple, and a monochrome triple (700) outranks
+a monochrome three-member group (400). Nothing in the engine may assume groups
+outrank triples; the tiebreak is by payout and nothing else, and these tests hold
+that line.
+
+The bonus is additive per copy, so a triple of the bonus character collects it
+three times (+150) while a group containing it collects once (+50).
 """
 
 from __future__ import annotations
@@ -47,28 +55,29 @@ def test_mixed_triple_pays_base(fixture_rules):
     assert call.payout == 100
 
 
-def test_monochrome_triple_doubles(fixture_rules):
+def test_monochrome_triple_carries_a_steep_premium(fixture_rules):
+    """700 vs 100 — a 7x jump, matching the real game's triple premium."""
     r = fixture_rules
     call = top(r, hand(r, ("a", "blue"), ("a", "blue"), ("a", "blue")))
     assert call.monochrome is True
     assert call.color == r.cards.color_index("blue")
-    assert call.payout == 200
+    assert call.payout == 700
 
 
-def test_bonus_character_triple_triples(fixture_rules):
-    """c is the bonus character: 100 x 3."""
+def test_a_triple_of_the_bonus_character_collects_the_bonus_three_times(fixture_rules):
+    """The bonus is per copy, so all three scoring cards count: 100 + 3x50."""
     r = fixture_rules
     call = top(r, hand(r, ("c", "blue"), ("c", "orange"), ("c", "pink")))
-    assert call.bonus is True
-    assert call.payout == 300
+    assert call.bonus_copies == 3
+    assert call.payout == 250
 
 
-def test_monochrome_bonus_triple_stacks(fixture_rules):
-    """Both modifiers apply: 100 x 2 x 3."""
+def test_monochrome_and_bonus_stack_additively(fixture_rules):
+    """700 + 3x50 — added on, not multiplied through."""
     r = fixture_rules
     call = top(r, hand(r, ("c", "pink"), ("c", "pink"), ("c", "pink")))
-    assert call.monochrome and call.bonus
-    assert call.payout == 600
+    assert call.monochrome and call.bonus_copies == 3
+    assert call.payout == 850
 
 
 def test_four_of_a_kind_scores_only_the_triple_inside_it(fixture_rules):
@@ -76,8 +85,23 @@ def test_four_of_a_kind_scores_only_the_triple_inside_it(fixture_rules):
     r = fixture_rules
     four = hand(r, ("a", "blue"), ("a", "blue"), ("a", "blue"), ("a", "orange"))
     call = top(r, four)
-    assert call.payout == 200          # the monochrome triple, not more
+    assert call.payout == 700          # the monochrome triple, not more
     assert sum(call.cards) == 3        # and it spends three cards, leaving the spare
+
+
+def test_a_spare_bonus_card_left_in_hand_is_not_paid_for(fixture_rules):
+    """Confirmed: only the cards actually spent count, not the whole hand.
+
+    Four copies of the bonus character, but a triple spends three, so the bonus is
+    collected three times and not four. This matters strategically — hoarding the
+    bonus holomem is worth nothing on its own, so its value is entirely in getting
+    it into a completed hand.
+    """
+    r = fixture_rules
+    counts = hand(r, ("c", "blue"), ("c", "blue"), ("c", "blue"), ("c", "orange"))
+    call = top(r, counts)
+    assert call.bonus_copies == 3
+    assert call.payout == 850          # 700 mono + 3x50, not 4x50
 
 
 # ------------------------------------------------------------------- groups ---
@@ -104,28 +128,39 @@ def test_four_member_group_beats_a_triple(fixture_rules):
     call = top(r, counts)
     assert call.kind is HandKind.GROUP
     assert call.group == r.cards.group_index("right")
-    # Contains the bonus character c, so 400 x 3.
-    assert call.bonus is True
-    assert call.payout == 1200
+    # Contains one copy of the bonus character c, so 400 + 50.
+    assert call.bonus_copies == 1
+    assert call.payout == 450
 
 
 def test_monochrome_group_stacks_with_bonus(fixture_rules):
-    """400 x 2 (mono) x 3 (bonus) — the fixture's biggest hand."""
+    """800 (mono) + 50 (one bonus copy) — the fixture's biggest hand."""
     r = fixture_rules
     counts = hand(r, ("c", "pink"), ("d", "pink"), ("e", "pink"), ("f", "pink"))
     call = top(r, counts)
-    assert call.monochrome and call.bonus
+    assert call.monochrome and call.bonus_copies == 1
     assert call.color == r.cards.color_index("pink")
-    assert call.payout == 2400
+    assert call.payout == 850
+
+
+def test_a_monochrome_triple_outranks_a_monochrome_small_group(fixture_rules):
+    """700 vs 400 — the property that stops anyone ordering hands by shape.
+
+    Holding both a monochrome triple of 'a' and nothing else to compare against,
+    the triple has to win on payout alone.
+    """
+    r = fixture_rules
+    assert r.payout(HandKind.TRIPLE, monochrome=True) == 700
+    assert r.payout(HandKind.GROUP, group_size=3, monochrome=True) == 400
 
 
 def test_group_without_the_bonus_character_gets_no_bonus(fixture_rules):
     r = fixture_rules
     call = top(r, hand(r, ("a", "blue"), ("b", "blue")))
     assert call.group == r.cards.group_index("left")
-    assert call.bonus is False
+    assert call.bonus_copies == 0
     assert call.monochrome is True
-    assert call.payout == 100          # 50 x 2
+    assert call.payout == 150
 
 
 def test_incomplete_group_does_not_score(fixture_rules):

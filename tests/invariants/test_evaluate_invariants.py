@@ -149,13 +149,18 @@ def test_monochrome_flag_matches_the_cards_spent(args):
 
 @given(rules_and_scoring_hand())
 @SETTINGS
-def test_bonus_flag_matches_the_characters_spent(args):
+def test_bonus_copies_counts_the_bonus_cards_actually_spent(args):
+    """A count, not a flag: the bonus pays per copy, so a triple of it pays x3."""
     rules, counts = args
     space = rules.cards
     bonus = rules.bonus_character
     for call in enumerate_calls(rules, counts, bonus_character=bonus, all_selections=True):
-        chars_used = {space.slot_char[s] for s, n in enumerate(call.cards) if n}
-        assert call.bonus == (bonus is not None and bonus in chars_used)
+        if bonus is None:
+            assert call.bonus_copies == 0
+            continue
+        spent = sum(call.cards[s] for s in space.char_slots[bonus])
+        assert call.bonus_copies == spent
+        assert call.bonus == (spent > 0)
 
 
 @given(rules_and_scoring_hand())
@@ -180,8 +185,7 @@ def test_payout_matches_a_fresh_recomputation(args):
             call.kind,
             group_size=None if call.group is None else len(rules.cards.group_members[call.group]),
             monochrome=call.monochrome,
-            bonus=call.bonus,
-            claimed=call.claimed,
+            bonus_copies=call.bonus_copies,
         )
         assert call.payout == expected
 

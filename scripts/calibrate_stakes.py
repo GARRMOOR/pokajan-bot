@@ -1,16 +1,16 @@
-"""Which ending does the payout scale produce?
+"""A sensitivity check on the payout table, now that the real numbers are known.
 
-The single most useful calibration question for M0b, and it needs no payout numbers
-at all — just an answer to "how do your real games actually end?"
+The payout-to-stack ratio decides whether games end by the deck running out or by
+someone going broke, and those two regimes play completely differently. The real
+table is confirmed, so the 1.0x row is the game we are actually modelling — the
+other rows exist to answer two questions:
 
-Payouts are unknown, but they are not free parameters: the ratio of payout to the
-1000-coin starting stack decides whether games end by the deck running out or by
-someone going broke. Those two regimes play completely differently, so getting the
-scale wrong would train an agent for the wrong game even if every other rule were
-right.
-
-So: run a few real games, note whether they end on deck exhaustion or on a player
-hitting zero, and read the payout scale off this table.
+  * How sensitive is the game to the payouts being slightly off? If the endings
+    shift wildly between 0.8x and 1.2x, a small transcription error in one row
+    would matter a lot and the table deserves re-checking.
+  * Does the simulated game *length* match reality? Turn and Pokajan counts at
+    1.0x should look like a real round. If they do not, something other than the
+    payouts is wrong.
 
     python scripts/calibrate_stakes.py
 """
@@ -30,20 +30,29 @@ from pokajan.core.rules import Rules, load_default  # noqa: E402
 from pokajan.envs.driver import play_game  # noqa: E402
 
 GAMES = 300
-SCALES = [30, 60, 120, 200, 350, 500, 800, 1200, 2000]
+SCALES = [0.25, 0.5, 0.8, 1.0, 1.25, 2.0, 4.0]
 
 
-def variant(base: Rules, triple_payout: int) -> Rules:
-    """The live rules with the payout scale swapped out."""
+def variant(base: Rules, scale: float) -> Rules:
+    """The live rules with every payout multiplied by `scale`.
+
+    Scales the whole table uniformly rather than tweaking one row, so the shape of
+    the real payouts — including the uneven monochrome premiums — is preserved.
+    """
+    table = base.raw["payouts"]["table"]
     raw = {**base.raw}
     raw["payouts"] = {
         **base.raw["payouts"],
-        "base": {
-            "triple": triple_payout,
+        "table": {
+            "triple": {k: max(1, int(v * scale)) for k, v in table["triple"].items()},
             "group": {
-                size: max(1, triple_payout * size // 3)
-                for size in base.raw["payouts"]["base"]["group"]
+                size: {k: max(1, int(v * scale)) for k, v in row.items()}
+                for size, row in table["group"].items()
             },
+        },
+        "bonus": {
+            **base.raw["payouts"]["bonus"],
+            "per_copy": int(base.bonus_per_copy * scale),
         },
     }
     return Rules.from_dict(raw, path=base.path)
@@ -51,13 +60,12 @@ def variant(base: Rules, triple_payout: int) -> Rules:
 
 def main() -> int:
     base = load_default()
-    current = base.raw["payouts"]["base"]["triple"]
 
     print(f"roster {base.cards.n_chars} characters, groups "
           f"{[len(m) for m in base.cards.group_members]}, "
           f"{base.play.initial_coins} coins, {GAMES} games per row")
     print("greedy callers, so these are upper bounds on how fast coins move.\n")
-    print(f"{'triple':>7} {'deck_empty':>11} {'bankrupt':>9} {'turns':>7} "
+    print(f"{'scale':>7} {'deck_empty':>11} {'bankrupt':>9} {'turns':>7} "
           f"{'Pokajans':>9} {'minted':>8}")
     print("-" * 56)
 
@@ -76,9 +84,9 @@ def main() -> int:
             calls.append(sum(result.calls_made))
             minted.append(result.coins_minted)
 
-        marker = "  <- current" if scale == current else ""
+        marker = "  <- the real payout table" if scale == 1.0 else ""
         print(
-            f"{scale:>7} "
+            f"{scale:>6.2f}x "
             f"{100 * endings['deck_empty'] / GAMES:>10.0f}% "
             f"{100 * endings['bankrupt'] / GAMES:>8.0f}% "
             f"{statistics.mean(turns):>7.1f} "
@@ -87,11 +95,12 @@ def main() -> int:
         )
 
     print(
-        "\nRead it backwards from real games:\n"
-        "  every game ends with the deck running out  -> payouts are low, near the top\n"
-        "  endings are a mix of both                  -> the middle rows\n"
-        "  someone almost always goes broke first     -> payouts are high, near the bottom\n"
-        "\nTurns and Pokajans per game are a second, independent check on the same thing."
+        "\nThe 1.0x row is the confirmed table. Compare its turns and Pokajans per\n"
+        "game against a real round — if they disagree, the mismatch is somewhere\n"
+        "other than the payouts (deck composition and hand limit are the suspects).\n"
+        "\nIf the endings barely move between 0.8x and 1.25x, the table is not on a\n"
+        "knife edge and small errors in it are survivable. If they swing hard, it is\n"
+        "worth re-checking the numbers."
     )
     return 0
 

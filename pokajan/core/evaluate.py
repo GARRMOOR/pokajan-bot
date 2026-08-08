@@ -34,7 +34,10 @@ class Call:
     payout: int
     cards: tuple[int, ...]           # count vector of the cards spent
     monochrome: bool
-    bonus: bool
+    # How many copies of the bonus holomem this hand is credited with. A count,
+    # not a flag, because the bonus is additive per copy: a triple of the bonus
+    # character earns it three times over.
+    bonus_copies: int
     claimed: bool
     character: int | None = None     # triples
     group: int | None = None         # group hands
@@ -44,6 +47,10 @@ class Call:
     # used to decide *strength* — that is `payout` alone.
     _order: tuple = field(default=(), repr=False, compare=False)
 
+    @property
+    def bonus(self) -> bool:
+        return self.bonus_copies > 0
+
     def describe(self, space: CardSpace) -> str:
         if self.kind is HandKind.TRIPLE:
             what = f"triple {space.character_names[self.character]}"
@@ -52,8 +59,8 @@ class Call:
         tags = []
         if self.monochrome:
             tags.append(f"mono {space.colors[self.color]}")
-        if self.bonus:
-            tags.append("bonus")
+        if self.bonus_copies:
+            tags.append(f"bonus x{self.bonus_copies}")
         if self.claimed:
             tags.append("claimed")
         suffix = f" [{', '.join(tags)}]" if tags else ""
@@ -118,14 +125,30 @@ def enumerate_calls(
     if must_use is not None and counts[must_use] < 1:
         return []
 
-    def add(kind, payout, cards, mono, bonus, character=None, group=None, color=None):
+    bonus_slots = () if bonus_character is None else space.char_slots[bonus_character]
+    # Under `whole_hand` the bonus counts copies you are holding, scoring or not,
+    # so it is the same for every call and can be computed once.
+    whole_hand_bonus = sum(counts[s] for s in bonus_slots)
+
+    def bonus_copies_for(cards) -> int:
+        if not bonus_slots:
+            return 0
+        if rules.bonus_applies_to == "whole_hand":
+            return whole_hand_bonus
+        return sum(cards[s] for s in bonus_slots)
+
+    def add(kind, cards, mono, *, size=None, character=None, group=None, color=None):
+        copies = bonus_copies_for(cards)
+        payout = rules.payout(
+            kind, group_size=size, monochrome=mono, bonus_copies=copies
+        )
         calls.append(
             Call(
                 kind=kind,
                 payout=payout,
                 cards=tuple(cards),
                 monochrome=mono,
-                bonus=bonus,
+                bonus_copies=copies,
                 claimed=claimed,
                 character=character,
                 group=group,
@@ -145,7 +168,6 @@ def enumerate_calls(
         if must_char is not None and c != must_char:
             continue
         slots = space.char_slots[c]
-        is_bonus = bonus_character is not None and c == bonus_character
 
         # Monochrome triple: three copies in a single colour.
         mono_colors = [k for k in range(n_colors) if counts[slots[k]] >= 3]
@@ -154,11 +176,7 @@ def enumerate_calls(
         for k in mono_colors:
             cards = [0] * len(counts)
             cards[slots[k]] = 3
-            add(
-                HandKind.TRIPLE,
-                rules.payout(HandKind.TRIPLE, monochrome=True, bonus=is_bonus, claimed=claimed),
-                cards, True, is_bonus, character=c, color=k,
-            )
+            add(HandKind.TRIPLE, cards, True, character=c, color=k)
 
         # Mixed triple. Only worth listing if it is not simply a worse way of
         # spending the same cards as an available monochrome one.
@@ -166,13 +184,11 @@ def enumerate_calls(
         mixed = [sel for sel in mixed if max(sel) < 3]
         if must_color is not None:
             mixed = [sel for sel in mixed if sel[must_color] >= 1]
-        if mixed:
-            payout = rules.payout(HandKind.TRIPLE, monochrome=False, bonus=is_bonus, claimed=claimed)
-            for sel in (mixed if all_selections else mixed[:1]):
-                cards = [0] * len(counts)
-                for k, take in enumerate(sel):
-                    cards[slots[k]] = take
-                add(HandKind.TRIPLE, payout, cards, False, is_bonus, character=c)
+        for sel in (mixed if all_selections else mixed[:1]):
+            cards = [0] * len(counts)
+            for k, take in enumerate(sel):
+                cards[slots[k]] = take
+            add(HandKind.TRIPLE, cards, False, character=c)
 
     # ------------------------------------------------------------- groups ---
     for g, members in enumerate(space.group_members):
@@ -181,7 +197,6 @@ def enumerate_calls(
         if must_char is not None and must_char not in members:
             continue
         size = len(members)
-        is_bonus = bonus_character is not None and bonus_character in members
 
         # Monochrome group: every member available in one shared colour.
         mono_colors_all = [
@@ -195,18 +210,11 @@ def enumerate_calls(
             cards = [0] * len(counts)
             for m in members:
                 cards[space.char_slots[m][k]] = 1
-            add(
-                HandKind.GROUP,
-                rules.payout(HandKind.GROUP, group_size=size, monochrome=True,
-                             bonus=is_bonus, claimed=claimed),
-                cards, True, is_bonus, group=g, color=k,
-            )
+            add(HandKind.GROUP, cards, True, size=size, group=g, color=k)
 
         # Mixed group: one copy of each member, colours free. The full product is
         # only enumerated on request — it is up to 3^5 for a five-member group and
         # every entry pays the same.
-        payout = rules.payout(HandKind.GROUP, group_size=size, monochrome=False,
-                              bonus=is_bonus, claimed=claimed)
         per_member = [
             [k for k in range(n_colors) if counts[space.char_slots[m][k]] >= 1]
             for m in members
@@ -227,7 +235,7 @@ def enumerate_calls(
             cards = [0] * len(counts)
             for m, k in zip(members, combo):
                 cards[space.char_slots[m][k]] += 1
-            add(HandKind.GROUP, payout, cards, False, is_bonus, group=g)
+            add(HandKind.GROUP, cards, False, size=size, group=g)
 
     calls.sort(key=lambda call: call._order)
     return calls

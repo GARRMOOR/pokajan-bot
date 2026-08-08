@@ -191,8 +191,8 @@ def test_self_drawn_hand_is_split_by_the_other_three(fixture_rules):
 def test_the_bigger_payout_wins_regardless_of_seat_order(fixture_rules):
     """Seat 1 is earlier in order but seat 2's hand pays far more.
 
-    Seat 1 claims a mixed triple of c: 100 x3 bonus = 300.
-    Seat 2 claims the whole 'right' group in blue: 400 x2 mono x3 bonus = 2400.
+    Seat 1 claims a mixed triple of c:            100 + 3x50 bonus  =  250
+    Seat 2 claims the whole 'right' group in blue: 800 mono + 50    =  850
     """
     r = fixture_rules
     engine = rigged(
@@ -211,8 +211,9 @@ def test_the_bigger_payout_wins_regardless_of_seat_order(fixture_rules):
     engine.submit([call(engine, 1), call(engine, 2)])
 
     s = engine.state
-    assert s.coins[2] == 3400, "seat 2 should have won the card"
+    assert s.coins[2] == 1850, "seat 2 should have won the card"
     assert s.coins[1] == 1000, "seat 1 gets nothing for losing the claim"
+    assert s.coins[0] == 150, "the discarder alone pays the winner's 850"
     assert s.calls_made[1] == 0 and s.calls_made[2] == 1
 
 

@@ -72,12 +72,46 @@ def test_monochrome_never_pays_less_than_mixed(cfg):
 def test_payouts_are_positive_integers(cfg):
     rules = Rules.from_dict(cfg)
     for mono in (False, True):
-        for bonus in (False, True):
-            for claimed in (False, True):
-                amount = rules.payout(
-                    HandKind.TRIPLE, monochrome=mono, bonus=bonus, claimed=claimed
-                )
-                assert isinstance(amount, int) and amount > 0
+        for copies in (0, 1, 3):
+            amount = rules.payout(HandKind.TRIPLE, monochrome=mono, bonus_copies=copies)
+            assert isinstance(amount, int) and amount > 0
+
+
+@given(rules_configs())
+@SETTINGS
+def test_the_bonus_is_additive_per_copy(cfg):
+    """Confirmed: +N per copy of the bonus holomem, not a multiplier.
+
+    So a triple of the bonus character earns it three times over. Asserted as
+    linearity in the copy count, which a multiplicative model could not satisfy.
+    """
+    rules = Rules.from_dict(cfg)
+    base = rules.payout(HandKind.TRIPLE)
+    for copies in (0, 1, 2, 3):
+        assert rules.payout(HandKind.TRIPLE, bonus_copies=copies) == (
+            base + rules.bonus_per_copy * copies
+        )
+
+
+@given(rules_configs())
+@SETTINGS
+def test_nothing_assumes_a_fixed_monochrome_ratio(cfg):
+    """The premium differs per hand shape, so only the ordering may be relied on.
+
+    In the real table it ranges from 2.67x on a three-member group to 7x on a
+    triple. Any code inferring one ratio from another would be wrong.
+    """
+    rules = Rules.from_dict(cfg)
+    triple_ratio = rules.payout(HandKind.TRIPLE, monochrome=True) / rules.payout(
+        HandKind.TRIPLE
+    )
+    assert triple_ratio >= 1.0
+    for members in rules.cards.group_members:
+        size = len(members)
+        ratio = rules.payout(HandKind.GROUP, group_size=size, monochrome=True) / rules.payout(
+            HandKind.GROUP, group_size=size
+        )
+        assert ratio >= 1.0
 
 
 @given(rules_configs())

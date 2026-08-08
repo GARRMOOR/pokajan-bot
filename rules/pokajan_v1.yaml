@@ -94,25 +94,43 @@ hands:
   - {id: group,  predicate: full_group}
 
 payouts:
-  # TODO(M2): every number in this block is a placeholder. Real values are being
-  # collected into data/captures/payouts_observed.yaml.
+  # CONFIRMED from real games.
   #
-  # The placeholders are chosen so a game lasts a plausible number of turns
-  # rather than because they resemble the real ones: ~72 draws are available
-  # after the deal, and a 1000-coin stack should survive several payouts.
-  base:
-    triple: 60                      # TODO(M2)
-    group:                          # TODO(M2): keyed by group size — does a bigger group pay more?
-      3: 60
-      4: 100
-      5: 150
+  # Recorded as a flat table rather than base-times-modifier because the
+  # monochrome premium is not a constant multiplier:
+  #
+  #                    multi    mono   ratio
+  #     triple           120     840    7.00
+  #     3-group          180     480    2.67
+  #     4-group          300     840    2.80
+  #     5-group          480    1800    3.75
+  #
+  # Two consequences worth keeping in mind. A monochrome triple (840) outranks a
+  # monochrome 3-group (480) and ties a monochrome 4-group — since strength *is*
+  # payout, nothing may assume groups beat triples. And a monochrome 5-group at
+  # 1800 exceeds the whole starting stack, so a single one of those off a discard
+  # bankrupts the discarder outright and ends the game.
+  table:
+    triple: {multi: 120, mono: 840}
+    group:
+      3: {multi: 180, mono: 480}
+      4: {multi: 300, mono: 840}
+      5: {multi: 480, mono: 1800}
+      # CONFIRMED: groups only ever have 3, 4 or 5 members, so this table is
+      # complete. Should an unlisted size ever turn up, the loader fails loudly
+      # naming the missing size rather than guessing — see Rules.validate.
 
-  modifiers:
-    monochrome:  {mode: multiply, value: 2.0}   # TODO(M2): multiplier or flat add?
-    bonus_card:  {mode: multiply, value: 2.0}   # TODO(M2): applies when the bonus character is in the scoring set
-    claimed:     {mode: multiply, value: 1.0}   # TODO(M2): does claiming pay differently from self-drawing?
-  combine: multiplicative
-  rounding: nearest_1
+  bonus:
+    # CONFIRMED: additive, per copy of the bonus holomem — not a multiplier. So a
+    # triple of the bonus character is +270, a group containing it is +90.
+    per_copy: 90
+    # CONFIRMED: counted over the cards that actually score, not the whole hand.
+    # A spare copy of the bonus holomem left behind after a call earns nothing.
+    applies_to: scoring_set
+
+  # CONFIRMED: one payout per hand shape, so claiming and self-drawing are worth
+  # the same amount. Only *who pays* differs.
+  claimed_changes_amount: false
 
   # CONFIRMED. Who hands over the coins:
   #   discarder    - the player whose discard was claimed pays the whole amount alone
