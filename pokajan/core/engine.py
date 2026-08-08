@@ -212,12 +212,28 @@ class Engine:
         s.hands[seat][s.deck.pop()] += 1
         return True
 
-    def _refill(self, seat: int) -> None:
+    def _refill(self, seat: int, target: int) -> None:
         s = self.state
-        limit = s.rules.play.hand_limit
-        while sum(s.hands[seat]) < limit:
+        while sum(s.hands[seat]) < target:
             if not self._draw(seat):
                 return
+
+    def _refill_target(self) -> int:
+        """How many cards a call refills you to.
+
+        Under `to_pre_discard_size` the refill restores the hand you had before
+        calling: in turn you had drawn and still owed a discard, so that is
+        hand_limit + 1; on a claim you were at rest, so hand_limit.
+
+        The distinction is not cosmetic. Refilling flat to hand_limit and then
+        taking the in-turn discard leaves you one card short *permanently* —
+        drawing back to seven and discarding to six every turn thereafter.
+        """
+        s = self.state
+        limit = s.rules.play.hand_limit
+        if s.rules.play.refill_policy == "to_pre_discard_size" and s.chain_needs_discard:
+            return limit + 1
+        return limit
 
     def _apply_discard(self, seat: int, slot: int) -> None:
         s = self.state
@@ -375,9 +391,10 @@ class Engine:
         # Every refill drains the shared deck, which is why chaining is a choice:
         # a long chain can run the deck dry and end the game.
         before = sum(s.hands[seat])
-        self._refill(seat)
+        target = self._refill_target()
+        self._refill(seat, target)
         self._event("refill", seat=seat, drawn=sum(s.hands[seat]) - before,
-                    deck_remaining=len(s.deck))
+                    to=target, deck_remaining=len(s.deck))
         if s.finished:
             return
 
@@ -421,8 +438,10 @@ class Engine:
             payers = [(winner + i) % s.players for i in range(1, s.players)]
 
         share, remainder = divmod(amount, len(payers))
-        # TODO(M2): the real game's rounding for an indivisible split is unknown.
-        # Spreading the remainder over the first payers keeps the totals exact.
+        # CONFIRMED that no real payout is indivisible by three, so `remainder` is
+        # always zero in practice — see test_every_real_payout_splits_evenly. The
+        # branch stays for generated configs in the property tests, where it keeps
+        # the totals exact by giving the odd coins to the earliest payers.
         owed = [share + (1 if i < remainder else 0) for i in range(len(payers))]
 
         collected = 0

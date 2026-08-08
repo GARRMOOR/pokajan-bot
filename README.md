@@ -55,23 +55,26 @@ M2 is the gate. The table is built; what remains is playing a real round beside 
 No training compute gets spent until that comparison is done, because a rules error
 found at M6 costs a retrain and one found now costs a YAML edit.
 
-### What is still assumed
+### The one thing still assumed
 
-Listed in the *Still guessing* tab in the app, and as `TODO(M2)` markers in
-`rules/pokajan_v1.yaml`:
+Everything else has been confirmed against real play. What remains is **which 100
+of the possible cards are in the deck** — and it cannot be resolved by looking.
 
-| assumption | how to check it | matters |
-|---|---|---|
-| deck is 100 cards spread as evenly as possible over the slots | does the game show remaining counts anywhere? | **high** |
-| calling on your own turn still ends with a discard | call in turn, see if you are asked to discard | medium |
-| opening hand is 7, same as the limit | count your cards at the deal | low |
-| indivisible splits round to the earliest payers | self-draw a 120 or 480; do all three pay equally? | low |
-| payout ties break from the discarder | only matters on an exact tie | low |
+The game shows a "remaining cards" list, but it counts every card the player has
+not *seen*, drawn from the full theoretical pool of 9 copies per holomem — 153
+cards for a 17-holomem lineup. The deck only ever holds 100. So about a third of
+that list is cards that do not exist in the game at all, and the number it shows is
+not the number of cards left.
 
-Deck composition is the one worth real attention. It drives the whole belief model,
-and it is the one thing that cannot be read off a rulebook. If the game does not
-expose it, that is fine — the belief model is built to infer it from play — but if
-it *does*, that is a meaningful edge.
+**This is where the bot's structural edge comes from.** A human reading that list is
+being confidently misled and has no practical way not to be. Inferring the real
+composition from cards actually observed is not a refinement here; it is the only
+way to know. That is what the composition posterior in `envs/belief.py` is for, and
+`pokajan/vision/` carries a note never to scrape the counter as truth.
+
+Since the underlying rule is unobservable, M5 should train against a *mixture* of
+composition rules rather than committing to one — an agent calibrated to the wrong
+rule would be wrong in exactly the same confident way the in-game counter is.
 
 ## Quick start
 

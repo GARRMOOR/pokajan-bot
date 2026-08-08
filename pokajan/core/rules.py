@@ -163,7 +163,7 @@ class Rules:
                 floor_is_asymmetric=bool(end["floor_is_asymmetric"]),
                 multi_round=bool(end["multi_round"]),
             ),
-            deck_size=int(deck["size"]),
+            deck_size=_deck_size(deck["size"], cards),
             composition=Composition(deck["composition"]),
             bonus_character=bonus_idx,
             tiebreak_order=tuple(raw["tiebreak"]["order"]),
@@ -282,6 +282,23 @@ class Rules:
 
     def payer_for(self, claimed: bool) -> Payer:
         return self._payer_when_claimed if claimed else self._payer_otherwise
+
+
+def _deck_size(value: Any, cards: CardSpace) -> int:
+    """Resolve `deck.size`, which may be a number or `all_variants`.
+
+    `all_variants` means every colour of every character at full count — 9 copies
+    each — so the deck grows with the roster instead of being a fixed subset of
+    it. The two give very different games: a fixed 100 makes most of the roster
+    absent, while all_variants makes every card countable in principle. Which one
+    the real game uses is still open; keeping both expressible means settling it
+    is a one-line edit rather than a rewrite.
+    """
+    if isinstance(value, str):
+        if value == "all_variants":
+            return cards.n_slots * cards.max_per_color
+        raise ValueError(f"unknown deck.size {value!r} (expected a number or 'all_variants')")
+    return int(value)
 
 
 def canonical_hash(raw: dict[str, Any]) -> str:

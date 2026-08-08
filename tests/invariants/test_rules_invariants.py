@@ -147,6 +147,27 @@ def test_rules_hash_tracks_values_not_layout(n_chars, reorder):
     assert canonical_hash(changed) != baseline
 
 
+def test_every_real_payout_splits_evenly_between_the_other_players(real_rules):
+    """Confirmed: no real payout is indivisible by three.
+
+    Worth pinning rather than treating as coincidence. It means the "who gets the
+    odd coin" question never arises in the real game, and if a future payout row
+    breaks the pattern that is a strong hint the number was transcribed wrong.
+    """
+    payers = real_rules.play.players - 1
+    amounts = []
+    for mono in (False, True):
+        amounts.append(real_rules.payout(HandKind.TRIPLE, monochrome=mono))
+        for members in real_rules.cards.group_members:
+            amounts.append(
+                real_rules.payout(HandKind.GROUP, group_size=len(members), monochrome=mono)
+            )
+    amounts.append(real_rules.bonus_per_copy)
+
+    offenders = [a for a in amounts if a % payers]
+    assert not offenders, f"these do not divide by {payers}: {sorted(set(offenders))}"
+
+
 def test_real_rules_file_loads(real_rules):
     """The live config must always be loadable — it is edited by hand."""
     assert real_rules.play.hand_limit == 7

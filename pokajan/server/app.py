@@ -37,38 +37,29 @@ WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 OPEN_QUESTIONS = [
     {
         "id": "composition",
-        "text": "Deck composition: 100 cards spread as evenly as possible across "
-                "all character/colour slots.",
-        "check": "Does the game show you how many of each card remain? If so we can "
-                 "count exactly instead of inferring.",
+        "text": "Which 100 of the 153 possible cards are in the deck — assumed "
+                "spread as evenly as the 3-per-slot cap allows.",
+        "check": "Not checkable by looking. The game's remaining-cards list counts "
+                 "everything you have not seen out of the full 9-per-holomem pool, "
+                 "so for a 17-holomem lineup it lists 153 cards when only 100 are "
+                 "real. Roughly a third of that list does not exist.",
         "impact": "high",
     },
-    {
-        "id": "discard_after_in_turn_call",
-        "text": "Calling on your own turn still ends with a discard.",
-        "check": "Call a Pokajan on your own turn. Are you then asked to discard?",
-        "impact": "medium",
-    },
-    {
-        "id": "deal_size",
-        "text": "Opening hand is 7 cards, same as the hand limit.",
-        "check": "Count your cards at the start of a round.",
-        "impact": "low",
-    },
-    {
-        "id": "split_rounding",
-        "text": "When a self-drawn payout does not divide by three, the remainder "
-                "goes to the earliest payers.",
-        "check": "Self-draw a hand paying 120 or 480. Do all three pay equally?",
-        "impact": "low",
-    },
-    {
-        "id": "tiebreak_from",
-        "text": "On an exact payout tie, priority runs from the discarder.",
-        "check": "Rare. Only matters if two players claim the same card for the "
-                 "same amount.",
-        "impact": "low",
-    },
+]
+
+# Everything below has been confirmed by playing a real round. Kept on screen so
+# the game can be spot-checked against them, rather than quietly assumed correct.
+SETTLED = [
+    ("Deck is always exactly 100 cards, whatever the roster size.", ""),
+    ("Payout table: triple 120/840, 3-group 180/480, 4-group 300/840, "
+     "5-group 480/1800 (multi/single colour).", ""),
+    ("Bonus holomem adds +90 per copy the hand actually scores.", ""),
+    ("Calling on your own turn still ends with a discard.", ""),
+    ("A call refills you to the size you had before it — eight in turn, seven on "
+     "a claim.", "Refilling flat to seven would cost you a card permanently."),
+    ("On a payout tie, priority runs in turn order from the player after the "
+     "discarder.", ""),
+    ("No payout is indivisible by three, so a split never leaves an odd coin.", ""),
 ]
 
 
@@ -153,6 +144,7 @@ class Session:
             "waiting_on": waiting_on,
             "history": self.history,
             "open_questions": OPEN_QUESTIONS,
+            "settled": [{"text": t, "note": n} for t, n in SETTLED],
             # Shown on screen so the numbers can be read straight off the config
             # and compared against the real game without opening the YAML.
             "payout_table": self.rules.raw["payouts"]["table"],

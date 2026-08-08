@@ -1,9 +1,15 @@
-# FROZEN TEST FIXTURE — DO NOT EDIT (values).
+# TEST FIXTURE — payout values are frozen; mechanics track the real game.
 #
-# Golden scenario tests are pinned to these exact numbers. When payout *values*
-# are corrected, add rules_v2.yaml and new scenarios alongside; this file keeps
-# passing, which is what proves a rules change did not silently alter behaviour
-# already verified.
+# The distinction matters, so it is stated explicitly rather than left to custom:
+#
+#   * Payout *values* are frozen. Scenario tests assert exact arithmetic against
+#     them, so when real payouts are corrected, add rules_v2.yaml and new
+#     scenarios; this file keeps passing, proving the change did not disturb
+#     behaviour already verified.
+#   * Play *mechanics* (refill policy, who pays, turn flow) track the real game.
+#     A fixture that modelled mechanics we know to be wrong would make every
+#     scenario built on it meaningless — it would be pinning behaviour we do not
+#     want. Corrections here are deliberate and noted in the commit.
 #
 # Migrated once, from base-times-modifier to the flat table below, when real
 # payouts showed the monochrome premium is not a constant multiple (2.67x on a
@@ -44,7 +50,7 @@ play:
   hand_limit: 5
   deal_size: 5
   draws_per_turn: 1
-  refill_policy: up_to_limit
+  refill_policy: to_pre_discard_size
   chain_allowed: true
   chain_is_optional: true
   claim_moves_turn: false

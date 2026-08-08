@@ -8,6 +8,17 @@ let DATA = null;       // last payload from the server
 let VIEW = null;       // history index being viewed, or null when live
 let socket = null;
 
+// Bot seats resolve between one server message and the next, so without pacing a
+// whole round of play appears in a single frame and there is no way to see what
+// happened. Events are revealed one at a time instead, and the decision controls
+// stay disabled until the narration catches up with the state.
+let shown = 0;         // how many events have been revealed
+let ticking = false;
+let SPEED = 650;       // ms between events; 0 reveals everything at once
+
+let prevHand = null;   // to highlight cards that just arrived
+let freshSlots = [];
+
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- helpers ---
@@ -34,9 +45,10 @@ function expand(counts) {
   return out;
 }
 
-function cardEl(slot, { mini = false, onClick = null } = {}) {
+function cardEl(slot, { mini = false, onClick = null, fresh = false } = {}) {
   const el = document.createElement('div');
-  el.className = `card ${colorName(slot)}${mini ? ' mini' : ''}${isBonus(slot) ? ' bonus' : ''}`;
+  el.className = `card ${colorName(slot)}${mini ? ' mini' : ''}` +
+    `${isBonus(slot) ? ' bonus' : ''}${fresh ? ' fresh' : ''}`;
   const who = document.createElement('div');
   who.className = 'who';
   who.textContent = charName(slot);
@@ -73,6 +85,7 @@ function render() {
     `${DATA.setup.character_names.length} holomem · deck ${state.deck_remaining} left`;
   $('replay-banner').style.display = live ? 'none' : 'block';
 
+  renderTicker();
   renderSeats(state, live);
   renderHand(state, live);
   renderTable(state);
@@ -81,6 +94,61 @@ function render() {
   renderLog();
   renderQuestions();
   renderScrubber();
+}
+
+// ---------------------------------------------------------------- pacing ---
+
+function onPayload(msg) {
+  const isNewGame = !DATA || msg.setup.game_id !== DATA.setup.game_id;
+  const prevData = DATA;
+  DATA = msg;
+
+  if (isNewGame) {
+    shown = allEvents().length;
+    prevHand = null;
+    freshSlots = [];
+    ticking = false;
+    render();
+    prevHand = DATA.state.hand.slice();
+    return;
+  }
+
+  // Cards that appeared in your hand since the last message — drawn, refilled,
+  // or claimed. Shown as "new" so the hand does not silently rearrange.
+  freshSlots = [];
+  if (prevHand) {
+    DATA.state.hand.forEach((n, slot) => {
+      for (let i = 0; i < n - prevHand[slot]; i++) freshSlots.push(slot);
+    });
+  }
+  prevHand = DATA.state.hand.slice();
+
+  if (SPEED === 0 || (prevData && shown >= allEvents().length)) {
+    shown = allEvents().length;
+    ticking = false;
+    render();
+    return;
+  }
+  tick();
+}
+
+function tick() {
+  const total = allEvents().length;
+  if (shown >= total) {
+    ticking = false;
+    render();
+    return;
+  }
+  shown += 1;
+  ticking = shown < total;
+  render();
+  if (ticking) setTimeout(tick, SPEED);
+}
+
+function skipToNow() {
+  shown = allEvents().length;
+  ticking = false;
+  render();
 }
 
 function renderSeats(state, live) {
@@ -123,7 +191,7 @@ function renderSeats(state, live) {
 function renderHand(state, live) {
   const host = $('hand');
   host.innerHTML = '';
-  const decision = live ? DATA.decision : null;
+  const decision = live && !ticking ? DATA.decision : null;
   const canDiscard = decision && decision.decision === 'DISCARD';
 
   const cards = expand(state.hand);
@@ -131,9 +199,14 @@ function renderHand(state, live) {
     host.innerHTML = '<span class="why">(empty)</span>';
     return;
   }
+  const remaining = freshSlots.slice();
   cards.forEach((slot) => {
     const clickable = canDiscard && decision.legal_mask[slot];
+    // Mark one card per fresh slot, not every copy of it.
+    const at = remaining.indexOf(slot);
+    if (at !== -1) remaining.splice(at, 1);
     host.appendChild(cardEl(slot, {
+      fresh: live && at !== -1,
       onClick: clickable ? (s) => send({ type: 'action', action: s }) : null,
     }));
   });
@@ -188,6 +261,12 @@ function renderPrompt(state, live) {
   if (!live) {
     host.classList.add('waiting');
     host.innerHTML = '<span class="why">Replay — press Live to resume playing.</span>';
+    return;
+  }
+
+  if (ticking) {
+    host.classList.add('waiting');
+    host.innerHTML = '<span class="why">Catching up on what just happened…</span>';
     return;
   }
 
@@ -298,20 +377,38 @@ function describeEvent(e) {
   }
 }
 
+function allEvents() {
+  return DATA.history.flatMap((snap) => snap.events);
+}
+
+function eventsUpToView() {
+  if (VIEW !== null) return DATA.history.slice(0, VIEW + 1).flatMap((s) => s.events);
+  return allEvents().slice(0, shown);
+}
+
 function renderLog() {
   const host = $('log');
   host.innerHTML = '';
-  const upTo = VIEW === null ? DATA.history.length : VIEW + 1;
-  DATA.history.slice(0, upTo).forEach((snap) => {
-    snap.events.forEach((e) => {
-      const [cls, text] = describeEvent(e);
-      const el = document.createElement('div');
-      el.className = `e ${cls}`;
-      el.innerHTML = `<span class="turn">t${String(e.turn).padStart(2, '0')}</span> ${text}`;
-      host.appendChild(el);
-    });
+  eventsUpToView().forEach((e) => {
+    const [cls, text] = describeEvent(e);
+    const el = document.createElement('div');
+    el.className = `e ${cls}`;
+    el.innerHTML = `<span class="turn">t${String(e.turn).padStart(2, '0')}</span> ${text}`;
+    host.appendChild(el);
   });
   host.scrollTop = host.scrollHeight;
+}
+
+function renderTicker() {
+  const host = $('ticker');
+  if (VIEW !== null || !ticking) { host.style.display = 'none'; return; }
+  const events = allEvents();
+  const latest = events[shown - 1];
+  if (!latest) { host.style.display = 'none'; return; }
+  const [cls, text] = describeEvent(latest);
+  host.style.display = 'flex';
+  host.className = `ticker ${cls}`;
+  $('ticker-text').textContent = text;
 }
 
 function renderQuestions() {
@@ -320,9 +417,8 @@ function renderQuestions() {
   host.innerHTML = '';
   const intro = document.createElement('div');
   intro.className = 'q';
-  intro.innerHTML = `<div class="c">These are the rules we are still assuming rather than
-    knowing. Each one is a single line in <code>rules/pokajan_v1.yaml</code>. Check them
-    against a real round and the guesses go away.</div>`;
+  intro.innerHTML = `<div class="c">Rules still assumed rather than known. Each is one
+    line in <code>rules/pokajan_v1.yaml</code>.</div>`;
   host.appendChild(intro);
 
   DATA.open_questions.forEach((q) => {
@@ -331,6 +427,20 @@ function renderQuestions() {
     el.innerHTML =
       `<div class="t"><span class="impact ${q.impact}">${q.impact}</span>${q.text}</div>` +
       `<div class="c">${q.check}</div>`;
+    host.appendChild(el);
+  });
+
+  const head = document.createElement('div');
+  head.className = 'q';
+  head.innerHTML = `<div class="t" style="color:var(--good)">Confirmed by play</div>
+    <div class="c">Listed so they can still be spot-checked rather than quietly trusted.</div>`;
+  host.appendChild(head);
+
+  (DATA.settled || []).forEach((s) => {
+    const el = document.createElement('div');
+    el.className = 'q';
+    el.innerHTML = `<div class="t">${s.text}</div>` +
+      (s.note ? `<div class="c">${s.note}</div>` : '');
     host.appendChild(el);
   });
   host.dataset.done = '1';
@@ -349,6 +459,11 @@ function renderScrubber() {
 
 $('newgame').onclick = () => { VIEW = null; send({ type: 'newgame' }); };
 $('live').onclick = () => { VIEW = null; render(); };
+$('skip').onclick = skipToNow;
+$('speed').onchange = (ev) => {
+  SPEED = Number(ev.target.value);
+  if (SPEED === 0) skipToNow();
+};
 $('slider').oninput = (ev) => {
   const v = Number(ev.target.value);
   VIEW = v >= DATA.history.length - 1 ? null : v;
@@ -365,7 +480,8 @@ document.querySelectorAll('.tabs button').forEach((b) => {
 
 // Number keys discard the nth card, since clicking seven cards a turn gets old.
 document.addEventListener('keydown', (ev) => {
-  if (VIEW !== null || !DATA || !DATA.decision) return;
+  if (ev.key === ' ') { ev.preventDefault(); if (ticking) skipToNow(); return; }
+  if (VIEW !== null || ticking || !DATA || !DATA.decision) return;
   const d = DATA.decision;
   if (d.decision === 'DISCARD' && ev.key >= '1' && ev.key <= '9') {
     const cards = expand(currentState().hand);
@@ -383,8 +499,7 @@ function connect() {
   socket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'error') { console.warn(msg.message); return; }
-    DATA = msg;
-    render();
+    onPayload(msg);
   };
   socket.onclose = () => {
     $('prompt').className = 'prompt waiting';

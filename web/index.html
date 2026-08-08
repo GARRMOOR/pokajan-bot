@@ -136,6 +136,30 @@
   .impact.medium { background: #78350f; color: #fde68a; }
   .impact.low { background: #1e3a5f; color: #bfdbfe; }
 
+  /* The play-by-play line. Bot seats used to resolve between one render and the
+     next, which made the game impossible to follow — events are now revealed one
+     at a time and narrated here. */
+  .ticker {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 14px;
+    font-size: 14px; min-height: 44px;
+  }
+  .ticker .spacer { flex: 1; }
+  .ticker.pokajan { border-left-color: var(--good); }
+  .ticker.minted, .ticker.over { border-left-color: var(--warn); }
+
+  /* A card that just arrived in your hand. */
+  .card.fresh { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .card.fresh::after {
+    content: "new"; position: absolute; top: 3px; right: 5px;
+    font-size: 9px; color: var(--accent); letter-spacing: .5px;
+  }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit;
+  }
+
   .scrub { display: flex; align-items: center; gap: 10px; padding: 8px 16px;
            border-top: 1px solid var(--line); background: var(--panel); }
   .scrub input[type=range] { flex: 1; }
@@ -151,6 +175,13 @@
       <h1>Pokajan</h1>
       <span class="meta" id="meta"></span>
       <span class="spacer"></span>
+      <label class="why" for="speed">Pace</label>
+      <select id="speed">
+        <option value="1100">Slow</option>
+        <option value="650" selected>Normal</option>
+        <option value="300">Fast</option>
+        <option value="0">Instant</option>
+      </select>
       <button id="newgame">New game</button>
     </header>
     <div id="replay-banner" class="banner" style="display:none">
@@ -158,6 +189,11 @@
     </div>
     <div class="seats" id="seats"></div>
     <div class="table-area">
+      <div id="ticker" class="ticker" style="display:none">
+        <span id="ticker-text"></span>
+        <span class="spacer"></span>
+        <button id="skip">Skip ▶▶</button>
+      </div>
       <div id="prompt" class="prompt waiting">connecting…</div>
       <div class="box">
         <h2>Your hand</h2>
