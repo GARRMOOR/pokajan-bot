@@ -93,6 +93,12 @@ class PublicState:
     final_coins: list[int] | None = None
     coins_minted: int = 0        # from the bankruptcy floor; see rules.yaml
 
+    # Also on GameSetup, and repeated here on purpose. The bonus holomem is drawn
+    # per game and displayed by the real game, so it is legitimately public — and
+    # an agent that only ever sees DecisionRequests cannot price a hand without
+    # it. Keeping PublicState self-sufficient is what lets agents stay stateless.
+    bonus_character: int | None = None
+
     # Recent discard order per seat, most recent first. Redundant with `discards`
     # but the ordering carries the read on what a player is collecting.
     recent_discards: list[list[int]] = field(default_factory=list)

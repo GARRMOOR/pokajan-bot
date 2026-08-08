@@ -540,6 +540,7 @@ class Engine:
             finished=s.finished,
             final_coins=s.coins[:] if s.finished else None,
             coins_minted=s.coins_minted,
+            bonus_character=s.bonus_character,
             recent_discards=[r[:] for r in s.recent_discards],
         )
 

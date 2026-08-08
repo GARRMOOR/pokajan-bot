@@ -9,10 +9,23 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M2 — playable in a browser.** Full game logic, an AEC environment, the confirmed
-payout table, and a web table you can sit down and play, with 80 tests passing.
-Games run roughly 43 turns and 11 Pokajans under greedy self-play, ending 86% on
-deck exhaustion and 14% on bankruptcy.
+**M3 — it plays, and the belief model earns its keep.** Full game logic, an AEC
+environment, the confirmed payout table, a web table you can sit down and play, a
+two-level belief, a heuristic agent, and an evaluation harness, with 117 tests
+passing.
+
+Measured over 2000 duplicate-dealt games:
+
+| | |
+|---|---|
+| heuristic vs greedy | **+638 coins/game**, 95% CI [+612, +664] |
+| win rate | 63.1% against three greedy opponents (25% is level) |
+| P(finish above 1000) | 84.5% |
+| what discard safety is worth | **+173 coins/game** against an identical agent with defence off |
+| composition estimate vs the in-game counter | **9.3× more accurate** |
+
+That last row is the project's whole thesis in one number, and it is explained
+under [the one thing still assumed](#the-one-thing-still-assumed).
 
 ```powershell
 .\.venv\Scripts\python -m pokajan.server.app     # then open http://127.0.0.1:8000
@@ -29,13 +42,36 @@ M0  core model, protocol, tests            <- done
 M1  engine + environment                   <- done
 M2  web GUI, human-playable                <- done
 M0b capture real payouts + card art        <- payouts confirmed; card art still open
-M3  observation encoder, belief, heuristic agent
+M3  observation encoder, belief, heuristic agent, eval harness   <- done
 M4  PIMC agent
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
 M7  hint mode + overlay
 M8  screen reading
 ```
+
+### Measuring an agent
+
+```powershell
+.\.venv\Scripts\python -m pokajan.train.evaluate --agent heuristic --baseline greedy
+```
+
+The game is violently high-variance — one monochrome five-group swings a game by
+more than the starting stack — so a plain "play 200 games and compare means" will
+report edges that are not there. Two things fix that, and neither is playing more
+games. The deck is **fixed per seed and replayed once per seat**, so seat
+advantage and opening-hand luck are experienced by both sides and cancel. And the
+four rotations of one deal are *correlated*, so the sample size is the number of
+seeds, not the number of games; error bars are computed over per-seed means.
+Treating 2000 games as 2000 observations understates the error by about half and
+is the easiest way to fool yourself here.
+
+The `by seat` line is the check that this worked: with duplicate dealing the
+spread across seats is ~58 coins, against per-game swings in the thousands.
+
+Registered agents: `random`, `greedy`, `heuristic`, plus `heuristic-blind`
+(defence off), `heuristic-fast` (fewer particles), and `heuristic-combined` — the
+ablations that produced the numbers above.
 
 ### Diagnostics
 
@@ -71,6 +107,50 @@ being confidently misled and has no practical way not to be. Inferring the real
 composition from cards actually observed is not a refinement here; it is the only
 way to know. That is what the composition posterior in `envs/belief.py` is for, and
 `pokajan/vision/` carries a note never to scrape the counter as truth.
+
+As of M3 that claim is measured rather than asserted. Against the true deck, the
+posterior's estimate of what is left is out by **0.11 cards per slot** where the
+counter's reasoning is out by **1.04** — 9.3× better, and the gap is structural
+rather than lucky, which is why `tests/scenarios/test_belief_scenarios.py` pins it
+as a ratio and fails if the posterior ever stops beating it.
+
+The inference is two levels, and the first is the one humans cannot do at all:
+
+1. **Composition** — how many copies of each card this game was built with.
+   Updated per slot from a hypergeometric likelihood, then coupled back together
+   so the totals come to exactly 100. That coupling is where "I have seen four of
+   these, so something else must be thinner than I thought" lives, and the in-game
+   counter cannot express it even in principle.
+2. **Location** — given a composition, where the unseen cards sit. Weighted
+   particles rather than per-slot averages, because the sharpest evidence is a
+   *joint* constraint: the engine only offers a claim to seats that could legally
+   make one, so a card left on the table has been declined by everyone who could
+   have used it. That rules out whole shapes of hand at once, and a per-slot
+   average would blur it away to nothing.
+
+Particles are also exactly what PIMC needs at M4, so the two consumers share one
+implementation instead of drifting apart.
+
+### What the heuristic does with it
+
+Everything is priced in coins, never in cards-from-completion. That sounds like a
+detail and is not: a hand one card from a monochrome triple (840) and a hand one
+card from a mixed one (120) are *identical* by any shanten count, and a hand two
+cards from 1800 beats a hand one card from 120. Ranking by distance ranks this game
+wrongly. So a hand is worth `payout x P(completing it)`, maximised over every
+target the roster admits, with the probability coming from the belief.
+
+One asymmetry is modelled exactly, because getting it wrong inflates every long
+shot: **a claim can only ever finish a hand.** Claiming is legal only when the
+claimed card completes the hand, so no number of opponent discards moves you from
+two short to one short. Only the last card gets the extra chances.
+
+Defence is the other half, and it matters more here than in most card games because
+a claim bills **the discarder alone** — there is no pot to share the damage. Each
+candidate discard is scored against the particles for what it would cost if
+claimed, taking a maximum across opponents rather than a sum, since only one claim
+can win. Both halves come out in coins, so the discard rule subtracts one from the
+other with no weighting factor to tune. Turning that term off costs 173 coins/game.
 
 Since the underlying rule is unobservable, M5 should train against a *mixture* of
 composition rules rather than committing to one — an agent calibrated to the wrong
@@ -173,7 +253,7 @@ rules/pokajan_v1.yaml     every rule number, and nothing else
 pokajan/core/             cards, rules, hand evaluation, action space
 pokajan/envs/             environment, observations, belief         (M1/M3)
 pokajan/agents/           heuristic, PIMC, neural                   (M3-M6)
-pokajan/train/            behaviour cloning, PPO, evaluation        (M5+)
+pokajan/train/            evaluation now; behaviour cloning, PPO    (M5+)
 pokajan/server/           protocol + web app                        (M2)
 pokajan/vision/           screen reading                            (M8)
 web/                      browser UI and overlay                    (M2/M7)
@@ -181,13 +261,26 @@ data/captures/            real-game payout observations and card art
 tests/                    invariants (any config) + scenarios (frozen fixture)
 ```
 
-Two files are load-bearing beyond their size:
+Three files are load-bearing beyond their size:
 
 - `pokajan/core/cards.py` fixes the count-vector layout. Everything downstream
   assumes it, and changing it invalidates every trained checkpoint.
+- `pokajan/envs/obs.py` fixes the observation layout, for the same reason. It
+  carries an `ObsSpec.signature` that gets stamped alongside the rules hash, so a
+  checkpoint cannot be loaded against a layout it was not trained under.
 - `pokajan/server/protocol.py` defines the only language spoken between "a game"
   and "something that plays it". At M8 the screen reader becomes just another
   producer of `PublicState`, and nothing else has to change.
+
+### Things tried that did not work
+
+Kept because a measured negative is worth more than an untested idea, and both are
+one flag away from being re-run against a better model.
+
+- **Valuing a hand by combining its best few targets** instead of taking the best
+  one. A maximum cannot see that two live chances beat one, which looked like a
+  clear gap. Measured at **-38 coins/game** (95% CI [-89, +13]) over 480 games —
+  targets overlap too heavily for independence to hold. See `TARGETS_COMBINED`.
 
 ## Testing
 
@@ -201,6 +294,12 @@ Two tiers, and the split is the point:
   which is frozen and never edited. When real rules land, they get a `rules_v2.yaml`
   and new scenarios; the old ones still pass, proving the change did not disturb
   behaviour already verified.
+
+Since M3 the scenarios also pin *properties* that no payout can express: that the
+posterior beats the in-game counter by a margin rather than a hair, and that a card
+nobody claimed measurably lowers the odds that anybody could have. Those two run
+against the live config on purpose — the size of the decoy is a fact about the real
+game, not about a fixture — so they assert ratios, which survive a rules edit.
 
 The fixture deliberately makes a two-member group pay *less* than a triple, so that
 nothing in the codebase can quietly assume groups outrank triples.
