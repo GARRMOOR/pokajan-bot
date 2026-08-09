@@ -109,6 +109,10 @@ def find_play_area(frame: np.ndarray) -> PlayArea | None:
 # head-and-shoulders crops needing their own template set, while the bonus is drawn as a
 # full card and reads with the ordinary card templates.
 DECK = Box(0.320, 0.300, 0.425, 0.530)
+# Just the number on the pile, which is the true count remaining out of 100 -- not to be
+# confused with the game's "remaining cards" list, which counts a theoretical pool and
+# is a decoy. See this package's __init__.
+DECK_COUNTER = Box(0.350, 0.470, 0.400, 0.515)
 GROUP_PANEL = Box(0.430, 0.300, 0.565, 0.520)
 BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 
@@ -136,11 +140,23 @@ DISCARDS = {
     "right": Box(0.740, 0.200, 0.870, 0.680),
 }
 
-# Scalars, for when digits are read. Each sits beside its seat's avatar.
+# Scalars. Each still catches the player's name on the line above and the underline
+# below, which `digits.split_digits` is built to cope with -- but each box now starts to
+# the RIGHT of the coin icon, and that is load-bearing rather than tidy.
+#
+# The icon is a disc of roughly aspect 1, indistinguishable by shape from two touching
+# digits. While it sat inside these boxes, splitting a too-wide run had to be forbidden,
+# and forbidding it lost every number whose digits touch -- 46, 52 and 30 on the deck
+# counter. Excluding the icon is what makes splitting safe, so these bounds and
+# `digits.MAX_GLYPH_ASPECT` are two halves of one decision.
+#
+# The left seat's box also stops short of that seat's card backs. They are full-height,
+# so they both bridged the name band into the number band and then passed the aspect test
+# as a tall narrow "digit" -- every three-digit total there came back with four glyphs.
 COINS = {
-    "bottom": Box(0.050, 0.760, 0.160, 0.815),
-    "left": Box(0.045, 0.245, 0.140, 0.300),
-    "top": Box(0.700, 0.150, 0.800, 0.205),
+    "bottom": Box(0.048, 0.760, 0.160, 0.815),
+    "left": Box(0.042, 0.245, 0.124, 0.300),
+    "top": Box(0.696, 0.150, 0.800, 0.205),
     "right": Box(0.885, 0.245, 0.985, 0.300),
 }
 RANKS = {

@@ -13,7 +13,7 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-203 tests passing.
+218 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
 themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
@@ -49,6 +49,27 @@ letterboxes it, so the bars get trimmed first and everything is relative to what
 left. `scripts/check_layout.py` draws the regions back onto a frame, which is the only
 way to check a fraction means what it says — it caught four misplaced boxes on the first
 run, including one that had the bonus card sitting inside the group panel.
+
+**Numbers read too**, with the exemplars cut from the game's own typeface into a
+committed text file — the one thing derived from the captures that is safe to commit,
+since ten digit shapes carry no personal data and it lets the reader work without the
+screenshots. Every coin total and deck counter transcribed by eye reads correctly
+(18/18), and the reads check themselves against a rule: coins must total 4000 plus
+whatever the bankruptcy floor minted. Three frames come to exactly 4000, one to 4030
+matching the minting already recorded for that game, and two show all four seats on the
+opening 1000.
+
+Segmentation is where every real failure came from — not one was a mismatched glyph:
+
+- **Find glyphs as runs of ink, never at a fixed pitch.** The typeface is proportional.
+- **Strip horizontal rules first.** The underline beneath each coin display inks every
+  column, which collapsed whole numbers into one enormous glyph.
+- **Pick the band by height, not by ink.** A coin box also catches the player's name, and
+  a name in kanji carries more ink than the number below it.
+- **Filter ink by saturation.** Totals are white; the coin icon is yellow and the card
+  backs blue. This is what lets a box stay wide enough for four digits — narrowing one to
+  dodge the icon clipped the leading digit and turned 1430 into a confident **430**, which
+  is the only kind of error that matters here.
 
 The reader's remaining hard part is now scoped rather than guessed. **Do not try to
 segment an opponent's discard field**: the seats either side lay their discards out as

@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 203 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 218 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
@@ -142,9 +142,14 @@ Order that actually works, with the risk concentrated late:
    Nothing here may guess: `identify` refuses on a thin *margin* rather than a low
    score, because an unknown holomem still produces a plausible best match, and an
    incomplete catalogue is the normal state.
-   Still to do: digits (coins, ranks, deck counter), the group panel's
-   head-and-shoulders portraits — a separate template set from the cards — and the
-   newest-card-per-seat read described in step 5.
+   **Digits work too** (`vision/digits.py`), 18/18 on transcribed coin totals and deck
+   counters, exemplars in the committed `data/captures/digits.yaml`. Every failure there
+   was segmentation, never a mismatched glyph — see that module, and note that the boxes
+   in `layout.py` and the thresholds in `digits.py` are two halves of one decision.
+   **The digit exemplars are missing a 5**, so any number containing one is refused. It
+   needs a capture with a 5 in a coin total or the deck counter.
+   Still to do: ranks, the group panel's head-and-shoulders portraits — a separate
+   template set from the cards — and the newest-card-per-seat read in step 5.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like

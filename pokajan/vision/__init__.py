@@ -47,7 +47,28 @@ depends on:
 * **A call displays its meld face-up in the centre**, with the hand type and amount
   spelled out ("3-Card 120"). So the cards a call consumed can be read at the
   moment it happens rather than reconstructed, which removes a whole class of
-  tracking error.
+  tracking error. This is the *only* moment `scored` is observable -- those cards
+  leave the table entirely afterwards -- so missing it means losing them for good.
+
+  The payout display gives up considerably more than the meld, and all of it is
+  printed rather than inferred:
+
+  - **Each seat's coin delta and resulting total**, in its own panel: "-40 / 920",
+    "+120 / 1380". So `coins` is read rather than accumulated by arithmetic, which
+    means a missed event cannot compound into a wrong stack.
+  - **Who paid whom**, as red arrows from each payer to the recipient, with the
+    recipient's panel outlined in blue and the payers' in red. The split rule is
+    therefore observable per event instead of assumed.
+  - **The hand type by name**, so the reader never has to classify the meld shape
+    itself -- and, better, every call becomes a free check of our own payout table
+    against the game's answer. Worth wiring up as an assertion rather than a log
+    line: a mismatch means `rules/pokajan_v1.yaml` is wrong.
+
+  **But the panels occlude most of the table** -- the group panel, parts of the hand,
+  and some discard fields sit underneath them. So "a payout is being displayed" is a
+  state the reader must recognise and refuse to do a normal table read in, rather
+  than something it can read through. The panels are large, rounded and near-white on
+  green, so detecting them is easy; assuming they are not there is what would hurt.
 
 * **Discards vanish from view two ways**: a claimed card leaves with the meld, and
   each seat's discard pile stacks once it grows, hiding the older cards. Neither
