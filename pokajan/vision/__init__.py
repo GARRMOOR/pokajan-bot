@@ -19,9 +19,15 @@ list is being misled, and has no practical way not to be.
 
 **Do not confuse that list with the number on the deck pile.** They are different
 UI elements and only one of them lies. The pile shows the true count remaining out
-of 100 -- observed at 71, 63 and 46 across a single round -- and should be read and
-trusted. The card *list* is the decoy. Having conflated the two once already while
-reading screenshots, it is written down here.
+of 100 -- observed at 71, 63, 46, 30 and 0 -- and should be read and trusted. The
+card *list* is the decoy. Having conflated the two once already while reading
+screenshots, it is written down here.
+
+Exhaustion is unmistakable and does not need OCR to detect: the pile art disappears
+entirely, leaving an empty outline, and the counter badge turns from dark green to
+red. So the deck-empty end condition can be recognised by colour alone, which is
+the right way round -- a misread digit there would have the reader thinking the game
+continues past its end.
 
 Facts established from real captures in data/tables/, all of which the reader
 depends on:
@@ -48,13 +54,86 @@ depends on:
   removes them from the game. So `table` and `scored` must still be accumulated by
   watching continuously -- the reader cannot join a round in progress.
 
+  The stacking was captured twice in one round, two minutes apart, and the geometry
+  is worth having: a seat's discards run *away* from that seat, newest at the far
+  end. Once the row is full the oldest cards slide underneath the card at the near
+  end, offset a few pixels down-and-right, newest of the buried set on top. Between
+  the two frames, two of the five cards in front of me became completely
+  unreadable, and I only know what they were because I hold the earlier frame.
+
+  Two consequences point in opposite directions and both matter:
+
+  - The *recent* discards are fully readable from one frame, in order, because they
+    are the un-stacked ones. So obs.py's per-opponent "last-3 discards" block is
+    cheap and reliable even on a cold start.
+  - The stack's depth reads as a handful of offset edges and then saturates, so a
+    late-joining reader cannot recover the buried cards *or even their count*. That
+    is a stronger statement than the claim-removal argument above: it means there
+    is no clever frame to catch up from. Accumulate from the deal, and if tracking
+    is lost, say so and stop advising rather than advise from a partial `table`.
+
 * **Cards carry their group name** ("Gen1", "ID Gen3", "Myth") and colour is the
   card frame, not the artwork. So identification decomposes cleanly: character from
   an art template, colour from a flat frame sample, group as a free cross-check.
   One colourless template per character covers all three colours.
 
-* **The roster is redrawn every round** and is revealed up front on a "Groups
-  coming up" panel, five slots wide with unused slots greyed. Group sizes observed:
-  4/4/3/5 and 4/4/4/3. The panel crops portraits head-and-shoulders while cards
-  show fuller art, so matching between them needs a crop step.
+* **The roster is redrawn every round**, and the panel showing it **stays on the
+  table for the whole round** -- it is not just an opening reveal. Confirmed at
+  deck 30 and again at deck 0, unchanged. So there is no animation to catch and no
+  timing dependency: the roster and the bonus holomem can be read from any frame,
+  including the first one the reader ever sees. Group sizes observed: 4/4/3/5,
+  4/4/4/3 and 4/4/4/5 (17 characters).
+
+  The panel is a fixed 4x5 grid, and the grey right-pointing triangle in unused
+  slots is a **placeholder, not a "more" affordance** -- nothing scrolls, and a
+  group never exceeds 5. Reading group size is therefore counting non-placeholder
+  cells, and the placeholder is a flat uniform grey that a mean-colour test
+  separates from artwork without any character recognition at all.
+
+  The panel crops portraits head-and-shoulders while cards show fuller art, so
+  matching between them needs a crop step.
+
+* **The bonus holomem is displayed as a full card** beside that panel, under the
+  word BONUS, all round. So it reuses the same templates as hands and discards
+  rather than needing the portrait set, and it never has to be inferred from a
+  payout. It also carries a sparkle effect that follows it into your hand, which is
+  a second, redundant read on the same fact.
+
+* **A seat's hand size is directly visible.** Card backs sit in one tight row, and
+  a seat that has drawn and not yet discarded holds the drawn card **detached** from
+  the row, mahjong-style. That is the visible form of hand size 8, and it is what
+  makes the deck counter read one lower than a naive `100 - 28 - drawn` -- the
+  reason the counter showed 71 rather than 72 in an earlier capture.
+
+* **One of the four "gates" around the centre oval lights yellow for the seat that
+  is to act.** Strongly indicated rather than confirmed: in the deck-0 frame the
+  left gate is lit *and* the left player holds a detached card, two independent
+  signals agreeing; in the deck-30 frame no gate is lit and no seat holds a
+  detached card. One capture where a known seat is clearly mid-decision would
+  settle it. Worth settling, because it is a far cheaper current-seat read than
+  inferring turn order from hand sizes, and the reader needs current seat to know
+  whether it is watching a discard or a claim window.
+
+* **Each seat's cards are drawn facing that seat, and the table has perspective.**
+  The side seats' cards are not merely rotated 90 degrees, they are sheared into
+  parallelograms. Template matching therefore needs a per-region affine
+  rectification, not a rotation -- planning for rotation alone would produce a
+  recogniser that works on my own hand and quietly fails on everyone else's.
+
+* **Live rank badges (1st-4th) sit beside each seat's coins**, and a tie shows the
+  same rank twice (observed: two seats both "1st" at 1430). Cheap to read, and it
+  is exactly the quantity the safe agent is optimising against, so the overlay can
+  display P(finishing above 1000) next to the game's own answer.
+
+* **Coins totalled exactly 4000 in a game that ended on deck exhaustion** with the
+  last seat still holding 10, against 4030 in the earlier game where a seat hit the
+  floor. Minting is conditional on the floor actually biting, which is how the
+  engine models it.
+
+Unresolved, noted so it is not mistaken for something already understood: in the
+deck-0 frame two cards in my hand -- both copies of the same character, different
+colours -- carry a yellow border glow. Hover-highlighting every copy of the card
+under the cursor is the obvious guess, but it could equally be a hint about a
+scoring possibility, and the difference matters because the second reading would
+mean the game is leaking advice the reader could just copy.
 """

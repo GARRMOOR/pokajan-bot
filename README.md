@@ -9,10 +9,10 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M4 — search failed; sharper beliefs won.** Full game logic, an AEC environment,
-the confirmed payout table, a web table you can sit down and play, a two-level
-belief, three agents, a determinized-search implementation, and an evaluation
-harness, with 133 tests passing.
+**M7, part one — the bot now explains itself, in the browser.** Full game logic, an
+AEC environment, the confirmed payout table, a web table you can sit down and play
+*with a hint panel*, a two-level belief, three agents, a determinized-search
+implementation, and an evaluation harness, with 142 tests passing.
 
 The agent ladder, all measured by duplicate dealing with 4-seat rotation:
 
@@ -49,10 +49,40 @@ under [the one thing still assumed](#the-one-thing-still-assumed).
 ```
 
 You take a seat, simple bots take the other three. The point is not the game — it
-is the three panels around it: every payout is shown with the arithmetic that
-produced it, the transcript reads like something you can hold next to a real round
-and check line by line, and the *Still guessing* tab lists the rules we are
-assuming rather than knowing. Play a real round alongside it and those go away.
+is the panels around it: every payout is shown with the arithmetic that produced it,
+the transcript reads like something you can hold next to a real round and check line
+by line, and the *Still guessing* tab lists the rules we are assuming rather than
+knowing. Play a real round alongside it and those go away.
+
+Press **h** and the bot says what it would do and why:
+
+```
+[DISCARD] discard Sakura Miko (pink)                 48 samples · 18 ms
+  50% chance this ranking survives redrawing the belief — not a claim about the model
+  Throw Sakura Miko (pink). What is left is worth about 256 coins, and it risks 18
+  if somebody claims it. This one is a coin flip: Hoshimachi Suisei (pink) is
+  within 0 coins, which is inside the sampling noise. Either is fine.
+  next best — Hoshimachi Suisei (pink) level · Ninomae Ina'nis (blue) -2
+```
+
+Three things about that output are deliberate, and each is a way the panel could
+have been worse:
+
+- **It reports a toss-up as a toss-up.** Opening discards usually are one: six draws
+  at 1024 particles on the same position produced three different answers. A panel
+  that manufactured a reason each time would be persuasive and wrong.
+- **The percentage is labelled with what it measures** — whether the *ranking*
+  survives resampling the belief. Model error is not in it. Calling it "confidence"
+  would imply a claim the number cannot support.
+- **Alternatives are shown as a gap, not a score.** A score nets danger off hand
+  value, so printing it beside the headline's hand value invites subtracting two
+  different quantities — which is exactly what happened while building this, reading
+  a 5-coin gap where the real one was nil.
+
+The sample count is selectable, with wall time shown, because that is the decision
+the overlay depends on: 48 samples costs ~16 ms, 1024 costs ~210 ms and is worth
++50 coins/game. Against the real game's ~10 s per turn, both are free — so the
+overlay can afford the expensive setting, and now that is measured rather than hoped.
 
 ```
 M0  core model, protocol, tests            <- done
@@ -63,9 +93,16 @@ M3  observation encoder, belief, heuristic agent, eval harness   <- done
 M4  PIMC agent                             <- built and measured; does not beat M3
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
-M7  hint mode + overlay
+M7  hint mode + overlay                    <- hint panel done; overlay window next
 M8  screen reading
 ```
+
+**M7 and M8 do not depend on M5 or M6**, and the roadmap's ordering is misleading
+about that. It is the order for building the *best* agent, not for getting a usable
+overlay: the heuristic already plays well, already decides from a `PublicState`, and
+because `server/protocol.py` is the seam, dropping a trained agent in later changes
+nothing else. Taking the milestones in order would be two of them of delay for no
+benefit to the thing being built. See `CLAUDE.md` for the order that works.
 
 ### Measuring an agent
 

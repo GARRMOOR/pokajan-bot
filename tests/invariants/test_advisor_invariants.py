@@ -56,6 +56,9 @@ def test_advice_is_always_playable(config):
             for alt in rec.alternatives:
                 assert alt["action"] != rec.action
                 assert request.legal_mask[alt["action"]]
+                # The rendered gap. Never negative, or the "recommendation" is
+                # not the best option the advisor found.
+                assert alt["behind"] >= -1e-9, "an alternative scored above the advice"
             checked += 1
         engine.submit([others[r.seat].act(r) for r in pending])
 

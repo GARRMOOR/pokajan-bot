@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..agents.advisor import Advisor
 from ..agents.base import GreedyCallerAgent
 from ..core.engine import Engine
 from ..core.rules import Rules, load_default
@@ -63,12 +65,32 @@ SETTLED = [
 ]
 
 
+# Particle counts offered in the hint panel. 48 is the measured default; 1024 is
+# the one configuration that beat it (+50 coins/game, see the README's M4 table) and
+# is here so the cost of that edge is visible rather than asserted. The real game
+# allows roughly ten seconds a turn, so the panel showing wall time is what decides
+# whether the overlay can afford the expensive setting.
+#
+# Zero is deliberately not offered. With no particles the danger term vanishes, the
+# ranking becomes purely offensive and therefore perfectly stable to resampling, so
+# the reported confidence would be high for the wrong reason -- the one thing this
+# panel must never do.
+HINT_PARTICLES = [48, 256, 1024]
+DEFAULT_HINT_PARTICLES = 48
+
+
 class Session:
     """One game: a human seat, bot seats, and the history needed to replay it."""
 
     def __init__(self, rules: Rules, human_seat: int = 0, seed: int | None = None) -> None:
         self.rules = rules
         self.human_seat = human_seat
+        self.hint_particles = DEFAULT_HINT_PARTICLES
+        # One advisor for the whole session. It must outlive individual decisions
+        # because its belief is accumulated from consecutive views -- see
+        # Advisor.observe. Rebuilding it per request would silently discard the
+        # pass-inference that is most of its edge.
+        self.advisor = Advisor(rules, seed=0, particles=self.hint_particles)
         self.new_game(seed)
 
     def new_game(self, seed: int | None = None) -> None:
@@ -124,12 +146,46 @@ class Session:
     def _snapshot(self) -> None:
         events = self.engine.state.events[self._events_sent:]
         self._events_sent = len(self.engine.state.events)
-        self.history.append(
-            {
-                "state": asdict(self.engine.public_state(self.human_seat)),
-                "events": events,
-            }
+        view = self.engine.public_state(self.human_seat)
+        # Fed on every snapshot, not only when a hint is asked for. Whether anyone
+        # claimed a discard is only readable as a difference between consecutive
+        # views, so a belief that skipped the quiet positions would be inferring
+        # from gaps. Costs nothing -- observe() does no sampling.
+        self.advisor.observe(view)
+        self.history.append({"state": asdict(view), "events": events})
+
+    # -------------------------------------------------------------- hinting --
+    def hint(self) -> dict:
+        """What the bot would do here, with the time it took to decide.
+
+        On demand rather than bundled into every update, for two reasons: the
+        expensive part should not sit on the critical path of ordinary play, and a
+        hint that appears unasked turns the validation table into a spectator sport
+        just when odd branches most need exercising by hand.
+
+        The wall time is part of the answer, not diagnostics. The real game allows
+        about ten seconds a turn, and whether the overlay can afford 1024 particles
+        is a question only a measurement answers.
+        """
+        mine = next(
+            (r for r in self.engine.pending_decisions() if r.seat == self.human_seat),
+            None,
         )
+        if mine is None:
+            return {"type": "hint", "hint": None, "reason": "nothing to decide"}
+
+        self.advisor.agent.particles = self.hint_particles
+        started = time.perf_counter()
+        rec = self.advisor.recommend(mine)
+        elapsed = (time.perf_counter() - started) * 1000.0
+        return {
+            "type": "hint",
+            "hint": asdict(rec),
+            "ms": round(elapsed, 1),
+            "particles": self.hint_particles,
+            "turn_index": mine.state.turn_index,
+            "decision": mine.decision,
+        }
 
     def payload(self) -> dict:
         pending = self.engine.pending_decisions()
@@ -145,6 +201,8 @@ class Session:
             "history": self.history,
             "open_questions": OPEN_QUESTIONS,
             "settled": [{"text": t, "note": n} for t, n in SETTLED],
+            "hint_particles": HINT_PARTICLES,
+            "hint_particles_current": self.hint_particles,
             # Shown on screen so the numbers can be read straight off the config
             # and compared against the real game without opening the YAML.
             "payout_table": self.rules.raw["payouts"]["table"],
@@ -191,6 +249,20 @@ def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
                         continue
                 elif kind == "newgame":
                     session.new_game(message.get("seed"))
+                elif kind == "hint":
+                    # Answered on its own rather than by resending the whole state,
+                    # so asking for advice never disturbs the table -- the overlay
+                    # will be doing exactly this against a game it cannot touch.
+                    if "particles" in message:
+                        want = int(message["particles"])
+                        if want not in HINT_PARTICLES:
+                            await socket.send_text(json.dumps(
+                                {"type": "error", "message": f"bad particle count {want}"}
+                            ))
+                            continue
+                        session.hint_particles = want
+                    await socket.send_text(json.dumps(session.hint()))
+                    continue
                 else:
                     await socket.send_text(
                         json.dumps({"type": "error", "message": f"unknown message {kind!r}"})

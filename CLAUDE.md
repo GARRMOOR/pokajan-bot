@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 137 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 142 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy and torch are training-only** (`requirements-train.txt`) and *not
@@ -94,18 +94,30 @@ first** — it is roughly two milestones of delay for no benefit to the overlay.
 
 Order that actually works, with the risk concentrated late:
 
-1. Hint panel in the existing web UI — validates advice end-to-end, needs no vision.
+1. ~~Hint panel in the existing web UI~~ — **done.** `agents/advisor.py` is the only
+   producer of `Recommendation`; `Session.hint()` serves it on request; `web/app.js`
+   renders it. Measured at 16 ms (48 samples) to 210 ms (1024) against a ~10 s turn.
 2. Overlay window (frameless, transparent, click-through — pywebview gives the first
    three, click-through needs a Win32 `WS_EX_TRANSPARENT` call via ctypes).
 3. Per-game roster construction: `rules/pokajan_v1.yaml` pins one roster, but the real
    game redraws 14–19 characters and 4 groups every round. Everything downstream is
    roster-agnostic, so this is "build a `Rules` from the observed roster", not a
-   refactor — but nothing does it yet and M8 cannot start without it.
+   refactor — but nothing does it yet and M8 cannot start without it. Cheaper than it
+   looks: the roster panel stays on the table all round, so there is no animation to
+   catch and no state to reconstruct.
 4. Static recognition from one screenshot → roster, groups, hand, coins.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like
-   bad advice rather than a bug.
+   bad advice rather than a bug. Captures confirm there is no shortcut — older
+   discards stack until neither the cards nor their count can be read, so no single
+   frame lets a reader catch up. See `pokajan/vision/__init__.py`.
+
+The browser panel already lives under that same constraint on purpose:
+`Session._snapshot` feeds `Advisor.observe` on **every** state, not only the ones a
+hint is asked about, because an unclaimed discard is visible only as a difference
+between consecutive views. Moving that into `hint()` for speed would leave the
+belief inferring from gaps and nothing would look broken — there is a test.
 
 ## Test strategy
 

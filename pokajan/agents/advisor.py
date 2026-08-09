@@ -57,10 +57,25 @@ class Advisor:
         self.risk_alpha = risk_alpha
 
     # ------------------------------------------------------------- advising --
-    def recommend(self, request: DecisionRequest) -> Recommendation:
-        state = request.state
+    def observe(self, state) -> None:
+        """Fold a public state into the belief without asking for advice.
+
+        Separate from `recommend` because the belief is *accumulated*, not derived:
+        an unclaimed discard is only visible as a difference between two
+        consecutive views, so a belief that only ever sees the positions somebody
+        happened to ask about has holes in it. Callers should feed every state they
+        see and request advice separately.
+
+        This is the same constraint the M8 screen reader lives under, so the
+        browser panel and the overlay share it rather than the overlay discovering
+        it later.
+        """
         self.agent.start_game(state)
         self.agent.belief.observe(state)
+
+    def recommend(self, request: DecisionRequest) -> Recommendation:
+        state = request.state
+        self.observe(state)
 
         decision = DecisionType[request.decision]
         if decision is DecisionType.DISCARD:
@@ -98,6 +113,14 @@ class Advisor:
         runner_up = scored[1] if len(scored) > 1 else None
         gap = 0.0 if runner_up is None else best["score"] - runner_up["score"]
         confidence = self._confidence(gap)
+
+        # How far behind the recommendation each option is, rather than leaving the
+        # subtraction to whoever renders this. `score` nets the danger off the hand
+        # value, so a panel showing raw scores next to the headline's hand value
+        # invites a comparison between two different quantities -- observed doing
+        # exactly that, reading a 5-coin gap where the real one was nil.
+        for row in scored[1:]:
+            row["behind"] = best["score"] - row["score"]
 
         return Recommendation(
             seat=request.seat,
@@ -158,6 +181,7 @@ class Advisor:
             "payout": 0,
         }
         chosen, rejected = (taking, passing) if wants_it else (passing, taking)
+        rejected["behind"] = chosen["score"] - rejected["score"]
 
         return Recommendation(
             seat=request.seat,
