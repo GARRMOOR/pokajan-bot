@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 218 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 236 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
@@ -156,8 +156,18 @@ Order that actually works, with the risk concentrated late:
    hololive branches, every observed group size is canonical, and a four-way
    classification plus a cell count beats recognising twenty portraits. See
    `pokajan/vision/__init__.py`.
-   Still to do: that group-label lookup table, ranks, and the newest-card-per-seat read
-   in step 5.
+   **Roster-from-panel is done** without recognising a portrait: `vision/roster_panel.py`
+   counts each row's real cells (placeholders are flat grey — no recognition), and the
+   four group labels are looked up in the committed `data/captures/hololive_groups.yaml`.
+   The count is the *cross-check* on the label and it refuses on disagreement; note it
+   only catches a label misread as a **differently sized** group.
+   A count that is not 3, 4 or 5 means the panel is occluded — a payout frame measured
+   [4,3,2,2] between two clean [4,4,4,5]s. Free detector, no extra machinery.
+   Card-art filenames drift (an apostrophe, three shortened names, one typo), so the
+   resolver maps via an alias table and **reports what it cannot map rather than fuzzy
+   matching** — `usada_pekore` is one letter from a real holomem.
+   Still to do: classifying the four labels themselves, ranks, and the
+   newest-card-per-seat read in step 5.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like

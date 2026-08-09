@@ -113,7 +113,14 @@ DECK = Box(0.320, 0.300, 0.425, 0.530)
 # confused with the game's "remaining cards" list, which counts a theoretical pool and
 # is a decoy. See this package's __init__.
 DECK_COUNTER = Box(0.350, 0.470, 0.400, 0.515)
-GROUP_PANEL = Box(0.430, 0.300, 0.565, 0.520)
+# The 4x5 grid of member portraits, and nothing else. Tight on purpose: the row labels
+# sit immediately to its right, and a box that includes them makes the grid's fifth column
+# land on green felt -- which then reads as four filled rows where three have a
+# placeholder, so every group-size check passes for the wrong reason.
+GROUP_PANEL = Box(0.443, 0.328, 0.520, 0.497)
+# The row labels: "Ga", "4", "5", "My". Reading these four is what determines the roster,
+# since the game draws real hololive branches -- see vision/roster_panel.py.
+GROUP_LABELS = Box(0.527, 0.328, 0.560, 0.497)
 BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 
 # Card rows. Deliberately loose: a discard field is one card wide at the deal and five

@@ -1,0 +1,126 @@
+# The groups the game draws its roster from, and who is in them.
+#
+# Committed, like data/captures/digits.yaml and unlike anything image-shaped: this is
+# public information about a VTuber agency, not data about the people we played against.
+#
+# WHY THIS FILE EXISTS. The game reveals four groups a round and shows their members as
+# head-and-shoulders portraits. Reading those portraits with the card art scores 1/17 --
+# they are a different rendering, not a crop -- so recognising them would need a second
+# template set of its own. It does not have to: the game uses real hololive branches, so
+# knowing *which four groups* were drawn is enough to know the whole roster.
+#
+# That turns roster reading into a four-way label classification plus a lookup, and the
+# `size` below is what checks it. The panel is a fixed 4x5 grid whose unused cells hold a
+# flat grey placeholder, so counting real cells needs no recognition at all -- and a count
+# that disagrees with the size here means the label was misread. A wrong roster is silent
+# and disastrous (see pokajan/core/roster.py), so that disagreement must refuse.
+#
+# `confirmed: capture` means the membership was transcribed from a real round, not
+# recalled. The rest is from public knowledge and is checked against `size` at load; if
+# the game ever shows a count that disagrees, trust the game and fix the entry here.
+#
+# `badge` and `label` are what the card and the panel print, for the classifier to match.
+
+groups:
+  - id: gen0
+    label: "Gen0"
+    badge: "0"
+    size: 5
+    confirmed: capture
+    members: [tokino_sora, roboco, azki, sakura_miko, hoshimachi_suisei]
+
+  - id: gen1
+    label: "Gen1"
+    badge: "1"
+    size: 5
+    members: [yozora_mel, aki_rosenthal, akai_haato, natsuiro_matsuri, shirakami_fubuki]
+
+  # Fubuki is in both Gen1 and GAMERS, and her card art carries a per-group variant. The
+  # player's judgement is that the game never draws both as goals in one round, so
+  # core/roster.py refuses a roster where a holomem appears twice rather than modelling
+  # it. If a panel ever shows her in two rows, that refusal is the assumption to revisit.
+  - id: gamers
+    label: "GAMERS"
+    badge: "Ga"
+    size: 4
+    confirmed: capture
+    members: [shirakami_fubuki, ookami_mio, nekomata_okayu, inugami_korone]
+
+  - id: gen2
+    label: "Gen2"
+    badge: "2"
+    size: 5
+    members: [minato_aqua, murasaki_shion, nakiri_ayame, yuzuki_choco, oozora_subaru]
+
+  - id: gen3
+    label: "Gen3"
+    badge: "3"
+    size: 4
+    members: [usada_pekora, shiranui_flare, shirogane_noel, houshou_marine]
+
+  - id: gen4
+    label: "Gen4"
+    badge: "4"
+    size: 4
+    confirmed: capture
+    members: [amane_kanata, tsunomaki_watame, tokoyami_towa, himemori_luna]
+
+  - id: gen5
+    label: "Gen5"
+    badge: "5"
+    size: 4
+    confirmed: capture
+    members: [yukihana_lamy, momosuzu_nene, shishiro_botan, omaru_polka]
+
+  - id: holox
+    label: "holoX"
+    badge: "X"
+    size: 5
+    members: [laplus_darknesss, takane_lui, hakui_koyori, sakamata_chloe, kazama_iroha]
+
+  - id: myth
+    label: "Myth"
+    badge: "My"
+    size: 5
+    confirmed: capture
+    members: [mori_calliope, takanashi_kiara, ninomae_inanis, gawr_gura, amelia_watson]
+
+  - id: promise
+    label: "Promise"
+    badge: "Pr"
+    size: 5
+    members: [irys, ceres_fauna, ouro_kronii, nanashi_mumei, hakos_baelz]
+
+  - id: id1
+    label: "ID Gen1"
+    badge: "ID"
+    size: 3
+    confirmed: capture
+    members: [ayunda_risu, moona_hoshinova, airani_iofifteen]
+
+  - id: id2
+    label: "ID Gen2"
+    badge: "ID"
+    size: 3
+    members: [kureiji_ollie, anya_melfissa, pavolia_reine]
+
+  - id: id3
+    label: "ID Gen3"
+    badge: "ID"
+    size: 3
+    members: [vestia_zeta, kaela_kovalskia, kobo_kanaeru]
+
+# Card art filenames are typed by hand as captures come in, so they do not always match
+# the canonical ids above. Rather than renaming files -- which would have to happen again
+# every session -- the resolver in pokajan/vision/roster_panel.py maps them, and reports
+# anything it cannot map instead of guessing.
+#
+# Real cases found in data/cards/: an apostrophe the ids omit, three names shortened to
+# one word, and one outright typo. The typo is listed because guessing at it is exactly
+# what a resolver must not do -- a one-letter edit could as easily be a different holomem.
+aliases:
+  "ninomae_ina'nis": ninomae_inanis
+  "flare": shiranui_flare
+  "lui": takane_lui
+  "la+_darkness": laplus_darknesss
+  "usada_pekore": usada_pekora        # typo; keep until the file is renamed

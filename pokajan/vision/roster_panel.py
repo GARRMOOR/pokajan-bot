@@ -1,0 +1,221 @@
+"""Turning the group panel into a roster, without recognising a single portrait.
+
+The panel shows four groups and their members. Matching those head-and-shoulders
+portraits against the card art scores 1/17 -- they are a different rendering, not a crop
+-- so reading them directly would need a whole second template set.
+
+It does not have to. The game draws real hololive branches, so **which four groups were
+drawn is enough to know the roster**, and membership lives in the committed
+`data/captures/hololive_groups.yaml`. That reduces up to twenty portrait matches to a
+four-way label classification and a lookup.
+
+The lookup is only trustworthy because it is checked. The panel is a fixed 4x5 grid whose
+unused cells hold a flat grey placeholder, so counting the real cells in a row needs no
+recognition at all -- and a count that disagrees with the group's known size means the
+label was misread. That disagreement must refuse rather than repair: a wrong roster loads
+happily and then misprices the entire game, and advice from it looks exactly like advice
+from a right one.
+
+This module also resolves the card-art filenames, which are typed by hand as captures come
+in and do not always match the canonical ids. It maps what it can and **reports what it
+cannot**, because a catalogue that silently keys on a typo is a holomem the reader can
+never name.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import yaml
+
+from ..core.roster import ObservedGroup, ObservedRoster
+
+GROUPS_FILE = Path(__file__).resolve().parents[2] / "data" / "captures" / "hololive_groups.yaml"
+
+# A placeholder cell is flat and grey: near-zero saturation, mid brightness, and almost no
+# variation. Artwork is none of those.
+PLACEHOLDER_MAX_SATURATION = 0.18
+PLACEHOLDER_MAX_DETAIL = 26.0        # standard deviation of brightness within the cell
+PANEL_ROWS, PANEL_COLUMNS = 4, 5
+
+
+class PanelError(ValueError):
+    """The panel could not be read into a roster."""
+
+
+@dataclass(frozen=True)
+class Group:
+    """One hololive branch the game can draw."""
+
+    id: str
+    label: str
+    badge: str
+    size: int
+    members: tuple[str, ...]
+    confirmed: bool = False
+
+
+@dataclass(frozen=True)
+class GroupBook:
+    """Every group the game can draw, and how to name a holomem."""
+
+    groups: tuple[Group, ...]
+    aliases: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, path: str | Path = GROUPS_FILE) -> "GroupBook":
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        groups = []
+        for entry in raw.get("groups") or []:
+            members = tuple(entry["members"])
+            if len(members) != int(entry["size"]):
+                # The file contradicts itself, which would make every size check
+                # meaningless. Better to fail at load than to check against a lie.
+                raise PanelError(
+                    f"group {entry['id']!r} lists {len(members)} members "
+                    f"but claims size {entry['size']}"
+                )
+            groups.append(Group(
+                id=str(entry["id"]), label=str(entry["label"]), badge=str(entry["badge"]),
+                size=int(entry["size"]), members=members,
+                confirmed=entry.get("confirmed") == "capture",
+            ))
+        return cls(groups=tuple(groups), aliases=dict(raw.get("aliases") or {}))
+
+    def by_id(self, group_id: str) -> Group:
+        for group in self.groups:
+            if group.id == group_id:
+                return group
+        raise PanelError(f"unknown group {group_id!r}")
+
+    @property
+    def characters(self) -> frozenset[str]:
+        """Every canonical holomem id, which is what card art has to resolve to."""
+        return frozenset(m for group in self.groups for m in group.members)
+
+    # ------------------------------------------------------------- naming ---
+    def resolve(self, name: str) -> str | None:
+        """The canonical id for a card-art filename, or None if it is not recognised.
+
+        Aliases first, then an exact match. Deliberately no fuzzy matching: the art
+        includes `usada_pekore`, one letter from a real holomem, and a resolver willing
+        to close a one-letter gap would just as happily map a genuine holomem onto the
+        wrong one. Unrecognised is a useful answer; wrong is not.
+        """
+        key = name.strip().lower()
+        key = self.aliases.get(key, key)
+        return key if key in self.characters else None
+
+    def coverage(self, art_names: list[str]) -> tuple[dict[str, str], list[str], list[str]]:
+        """What art resolves to, what does not, and which holomem have none.
+
+        Three lists because they need three different responses: resolved art is usable,
+        unresolved art is a filename to fix, and a holomem with no art is simply one the
+        reader will refuse to name until a capture provides it.
+        """
+        resolved: dict[str, str] = {}
+        unresolved: list[str] = []
+        for name in art_names:
+            canonical = self.resolve(name)
+            if canonical:
+                resolved[name] = canonical
+            else:
+                unresolved.append(name)
+        missing = sorted(self.characters - set(resolved.values()))
+        return resolved, sorted(unresolved), missing
+
+
+# ------------------------------------------------------------------- panel ----
+def count_members(panel: np.ndarray) -> list[int]:
+    """How many real portraits each row of the panel holds.
+
+    No recognition involved: unused cells carry a flat grey placeholder with a triangle,
+    and a placeholder is the only thing in the grid with almost no colour and almost no
+    detail. Counting these is what validates a group label, so it must not depend on the
+    thing it validates.
+    """
+    height, width = panel.shape[:2]
+    if height < PANEL_ROWS or width < PANEL_COLUMNS:
+        raise PanelError(f"panel crop is too small: {width}x{height}")
+
+    counts = []
+    for row in range(PANEL_ROWS):
+        top, bottom = height * row // PANEL_ROWS, height * (row + 1) // PANEL_ROWS
+        filled = 0
+        for column in range(PANEL_COLUMNS):
+            left = width * column // PANEL_COLUMNS
+            right = width * (column + 1) // PANEL_COLUMNS
+            if not _is_placeholder(panel[top:bottom, left:right]):
+                filled += 1
+        counts.append(filled)
+    return counts
+
+
+def _is_placeholder(cell: np.ndarray) -> bool:
+    if cell.size == 0:
+        return True
+    pixels = cell.astype(np.float32)
+    # Sample the middle, away from the grid lines between cells.
+    h, w = pixels.shape[:2]
+    inner = pixels[h // 6:h - h // 6, w // 6:w - w // 6]
+    if inner.size == 0:
+        inner = pixels
+
+    high, low = inner.max(axis=2), inner.min(axis=2)
+    saturation = float(np.mean(np.where(high > 0, (high - low) / np.maximum(high, 1.0), 0.0)))
+    detail = float(inner.mean(axis=2).std())
+    return saturation <= PLACEHOLDER_MAX_SATURATION and detail <= PLACEHOLDER_MAX_DETAIL
+
+
+def panel_is_readable(counts: list[int], book: GroupBook) -> bool:
+    """Whether these member counts could have come from a panel at all.
+
+    Every hololive branch has 3, 4 or 5 members, so a row counted as anything else means
+    the panel is not currently readable rather than that the game dealt an odd group. In
+    practice that means a payout is being displayed: its panels sit over the grid, and a
+    frame mid-payout counted [4, 3, 2, 2] where the clean frames either side of it both
+    counted [4, 4, 4, 5].
+
+    A free check, needing nothing the reader does not already measure -- and the reader has
+    to know when it cannot see, because the alternative is advising from half a roster.
+    """
+    if len(counts) != PANEL_ROWS:
+        return False
+    sizes = {group.size for group in book.groups}
+    return all(count in sizes for count in counts)
+
+
+def roster_from_groups(
+    book: GroupBook,
+    group_ids: list[str],
+    *,
+    member_counts: list[int] | None = None,
+    bonus: str | None = None,
+) -> ObservedRoster:
+    """The roster implied by four group labels, checked against the panel's own counts.
+
+    `member_counts` comes from `count_members` and is the whole point: it is measured
+    without recognising anything, so it is independent evidence about the labels. A
+    mismatch means a label was misread, and the only safe response is to refuse.
+    """
+    if member_counts is not None and len(member_counts) != len(group_ids):
+        raise PanelError(
+            f"read {len(group_ids)} labels but {len(member_counts)} rows of members"
+        )
+
+    groups: list[ObservedGroup] = []
+    for index, group_id in enumerate(group_ids):
+        group = book.by_id(group_id)
+        if member_counts is not None and member_counts[index] != group.size:
+            raise PanelError(
+                f"row {index + 1} reads as {group.label} with {group.size} members, "
+                f"but the panel shows {member_counts[index]} -- the label is misread, "
+                f"or {group.label}'s membership in hololive_groups.yaml is wrong"
+            )
+        groups.append(
+            ObservedGroup(id=group.id, name=group.label, members=group.members)
+        )
+
+    return ObservedRoster(groups=tuple(groups), bonus_character=bonus)
