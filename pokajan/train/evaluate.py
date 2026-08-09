@@ -32,6 +32,8 @@ from pathlib import Path
 
 from ..agents.base import GreedyCallerAgent, RandomAgent
 from ..agents.heuristic import HeuristicAgent
+from ..agents.pimc import PIMCAgent
+from ..agents.rollout import FastAgent
 from ..core.engine import Engine
 from ..core.rules import Rules, load_default
 from ..envs.driver import play_game
@@ -57,6 +59,42 @@ AGENTS = {
     # against a better completion model; see TARGETS_COMBINED.
     "heuristic-combined": lambda rules, seed: HeuristicAgent(
         rules, seed=seed, targets_combined=4, name="heuristic-combined"
+    ),
+    # Determinized search, ~250ms a decision. Measured *worse* than the heuristic
+    # it is built on; the variants below are the sweep that established why, kept
+    # so the finding can be rechecked rather than taken on trust. See the README.
+    "pimc": lambda rules, seed: PIMCAgent(rules, seed=seed),
+    # Cheap valuation plus belief-driven defence. Built for M5's training loop,
+    # where the opponent pool is queried far too often to afford the heuristic.
+    "fast": lambda rules, seed: FastAgent(rules, seed=seed),
+    # Control for the PIMC matchups: PIMC's internal prior runs on as many belief
+    # particles as it has determinizations, so comparing it against the 48-particle
+    # default heuristic would charge the search for a weaker prior.
+    "heuristic-p16": lambda rules, seed: HeuristicAgent(
+        rules, seed=seed, particles=16, name="heuristic-p16"
+    ),
+    # Spending a large compute budget on belief precision rather than on search
+    # depth: same algorithm, a much sharper estimate of discard danger.
+    "heuristic-p1024": lambda rules, seed: HeuristicAgent(
+        rules, seed=seed, particles=1024, name="heuristic-p1024"
+    ),
+    # Sampled valuation: replaces the closed-form completion probability with
+    # E[best payout reachable] over futures drawn from the belief. Draws level with
+    # the closed form rather than beating it; the horizon sweep behind that is
+    # recorded on DEFAULT_HORIZON.
+    "heuristic-mc": lambda rules, seed: HeuristicAgent(
+        rules, seed=seed, futures=32, name="heuristic-mc"
+    ),
+    # Truncated rollouts, to test whether the chaos of a full game was the problem.
+    # It helps (-144 -> -85) and does not rescue it.
+    "pimc-d12": lambda rules, seed: PIMCAgent(
+        rules, seed=seed, rollout_depth=12, name="pimc-d12"
+    ),
+    # Search only where it is cheap and plausible — calls, claims, chains — and
+    # leave discards to the heuristic. The best PIMC variant, and still level at
+    # best with the agent it wraps.
+    "pimc-calls": lambda rules, seed: PIMCAgent(
+        rules, seed=seed, search_discards=False, name="pimc-calls"
     ),
 }
 

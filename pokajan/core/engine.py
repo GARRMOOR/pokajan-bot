@@ -101,6 +101,38 @@ class Engine:
         return Engine(self.state.clone())
 
     # ------------------------------------------------------- the interface --
+    def pending_seats(self) -> list[tuple[int, DecisionType, int | None]]:
+        """Who must act and why, as `(seat, decision, claimable_slot)`.
+
+        The same information `pending_decisions` carries, minus the description of
+        it. Building a `DecisionRequest` copies every count vector in the game so a
+        client can render it, which is exactly right for a client and far too
+        expensive for search: PIMC runs thousands of these per decision and never
+        looks at a `PublicState`. Both methods answer from this one, so there is no
+        second copy of the turn logic to drift.
+        """
+        s = self.state
+        if s.finished:
+            return []
+
+        if s.phase is Phase.AWAIT_DISCARD:
+            return [(s.current_seat, DecisionType.DISCARD, None)]
+
+        if s.phase is Phase.AWAIT_IN_TURN_CALL:
+            return [(s.current_seat, DecisionType.IN_TURN_CALL, None)]
+
+        if s.phase is Phase.AWAIT_CHAIN:
+            return [(s.chain_seat, DecisionType.CHAIN, None)]
+
+        if s.phase is Phase.AWAIT_CLAIMS:
+            return [
+                (seat, DecisionType.CLAIM, s.last_discard_slot)
+                for seat in s.claim_eligible
+                if seat not in s.claim_responses
+            ]
+
+        raise AssertionError(f"unhandled phase {s.phase!r}")
+
     def pending_decisions(self) -> list[DecisionRequest]:
         """Who must act, and what they may do.
 
@@ -108,78 +140,74 @@ class Engine:
         built from the same unmodified state. Callers may answer them in any
         order, or all at once; nothing moves until every one is in.
         """
-        s = self.state
-        if s.finished:
-            return []
+        return [
+            self._request(seat, decision, claimable_slot=slot)
+            for seat, decision, slot in self.pending_seats()
+        ]
 
-        if s.phase is Phase.AWAIT_DISCARD:
-            return [self._request(s.current_seat, DecisionType.DISCARD)]
+    def apply(self, moves) -> None:
+        """Apply `(seat, action)` pairs, then run play on to the next decision.
 
-        if s.phase is Phase.AWAIT_IN_TURN_CALL:
-            return [self._request(s.current_seat, DecisionType.IN_TURN_CALL)]
-
-        if s.phase is Phase.AWAIT_CHAIN:
-            return [self._request(s.chain_seat, DecisionType.CHAIN)]
-
-        if s.phase is Phase.AWAIT_CLAIMS:
-            return [
-                self._request(seat, DecisionType.CLAIM, claimable_slot=s.last_discard_slot)
-                for seat in s.claim_eligible
-                if seat not in s.claim_responses
-            ]
-
-        raise AssertionError(f"unhandled phase {s.phase!r}")
-
-    def submit(self, responses) -> None:
-        """Apply one or more answers, then run play on to the next decision."""
-        if not isinstance(responses, (list, tuple)):
-            responses = [responses]
-
+        The same validation `submit` performs, without building a request per seat
+        to validate against. This is what search drives the engine through.
+        """
         s = self.state
         if s.finished:
             raise ValueError("game is finished")
 
-        expected = {r.seat: r for r in self.pending_decisions()}
-        for response in responses:
-            request = expected.get(response.seat)
-            if request is None:
+        pending = {seat: (decision, slot) for seat, decision, slot in self.pending_seats()}
+        for seat, action in moves:
+            entry = pending.get(seat)
+            if entry is None:
                 raise ValueError(
-                    f"seat {response.seat} was not asked to act "
-                    f"(waiting on {sorted(expected)})"
+                    f"seat {seat} was not asked to act (waiting on {sorted(pending)})"
                 )
-            if not (0 <= response.action < len(request.legal_mask)):
-                raise ValueError(f"action {response.action} out of range")
-            if not request.legal_mask[response.action]:
+            decision, slot = entry
+            mask = legal_mask(
+                s.rules,
+                decision,
+                s.hands[seat],
+                bonus_character=s.bonus_character,
+                claimable_slot=slot,
+            )
+            if not (0 <= action < len(mask)):
+                raise ValueError(f"action {action} out of range")
+            if not mask[action]:
                 raise ValueError(
-                    f"seat {response.seat} played illegal action {response.action} "
-                    f"in phase {s.phase.name}"
+                    f"seat {seat} played illegal action {action} in phase {s.phase.name}"
                 )
 
         if s.phase is Phase.AWAIT_CLAIMS:
-            for response in responses:
-                s.claim_responses[response.seat] = response.action
+            for seat, action in moves:
+                s.claim_responses[seat] = action
             if len(s.claim_responses) == len(s.claim_eligible):
                 self._resolve_claims()
             return
 
-        if len(responses) != 1:
+        if len(moves) != 1:
             raise ValueError(f"phase {s.phase.name} expects exactly one response")
-        response = responses[0]
+        seat, action = moves[0]
 
         if s.phase is Phase.AWAIT_DISCARD:
-            self._apply_discard(response.seat, response.action)
+            self._apply_discard(seat, action)
         elif s.phase is Phase.AWAIT_IN_TURN_CALL:
-            if response.action == call_action(s.rules):
-                self._start_chain(response.seat, from_claim=False)
+            if action == call_action(s.rules):
+                self._start_chain(seat, from_claim=False)
             else:
                 s.phase = Phase.AWAIT_DISCARD
         elif s.phase is Phase.AWAIT_CHAIN:
-            if response.action == call_action(s.rules):
-                self._score_once(response.seat, claimed=False)
+            if action == call_action(s.rules):
+                self._score_once(seat, claimed=False)
             else:
                 self._end_chain()
         else:  # pragma: no cover - phases are exhaustive
             raise AssertionError(f"unhandled phase {s.phase!r}")
+
+    def submit(self, responses) -> None:
+        """Apply one or more `ActionResponse`s. The client-facing entry point."""
+        if not isinstance(responses, (list, tuple)):
+            responses = [responses]
+        self.apply([(r.seat, r.action) for r in responses])
 
     # ------------------------------------------------------------- turns ----
     def _begin_turn(self, *, draw: bool) -> None:
@@ -259,7 +287,7 @@ class Engine:
         """
         s = self.state
         eligible = []
-        for seat in self._claim_priority_order(discarder):
+        for seat in self.claim_priority_order(discarder):
             probe = s.hands[seat][:]
             probe[slot] += 1
             if can_call_using(s.rules, probe, slot, bonus_character=s.bonus_character):
@@ -273,7 +301,7 @@ class Engine:
         s.claim_responses = {}
         s.phase = Phase.AWAIT_CLAIMS
 
-    def _claim_priority_order(self, discarder: int) -> list[int]:
+    def claim_priority_order(self, discarder: int) -> list[int]:
         """Seats in the order that breaks a tie between equal payouts.
 
         Confirmed: ties go to "the earliest person in the play order". Whether

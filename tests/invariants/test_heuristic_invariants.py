@@ -53,6 +53,31 @@ def test_plays_a_legal_game_to_completion(config):
 
 @given(rules_configs())
 @SLOW
+def test_sampled_valuation_plays_a_legal_game(config):
+    """The other valuation has to hold up under any roster too.
+
+    `hand_value_sampled` reaches into the belief for a concrete deck and builds
+    hands larger than the hand limit on purpose; both are places where a roster
+    with an unusual shape could produce something the engine rejects.
+    """
+    rules = Rules.from_dict(config)
+    engine = Engine.new_game(rules, seed=24)
+    agents = [
+        HeuristicAgent(rules, seed=i, particles=TEST_PARTICLES, futures=6)
+        for i in range(rules.play.players)
+    ]
+
+    result = play_game(engine, agents)
+
+    assert engine.finished
+    assert engine.state.cards_in_play() == rules.deck_size
+    assert sum(result.final_coins) == (
+        rules.play.initial_coins * rules.play.players + result.coins_minted
+    )
+
+
+@given(rules_configs())
+@SLOW
 def test_never_proposes_an_illegal_action(config):
     """Checked before the engine sees it, so a fallback cannot hide a bug.
 

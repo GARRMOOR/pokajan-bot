@@ -45,6 +45,38 @@ CLAIM_EFFICIENCY = 0.55
 # estimate, so this buys both the read and the defence.
 DEFAULT_PARTICLES = 48
 
+# Sampled futures per decision when Monte-Carlo valuation is switched on. 0 uses
+# the closed form instead.
+DEFAULT_FUTURES = 32
+
+# How many of this seat's future draws a sampled future contains.
+#
+# The obvious choice is "all of them" — deck_remaining / players, around 17 at
+# mid-game — and it is wrong, because the sampled hand is never made to obey the
+# hand limit. Handed 17 extra cards, a seat can assemble essentially any target,
+# so the valuation stops asking "what will this hand become" and starts asking
+# "what exists in the deck". Capping the horizon keeps the reachable hand near the
+# size a real one can actually hold.
+#
+# Swept against the closed-form heuristic, coins/game:
+#
+#     horizon 2    -37   (CI [-88, +14])
+#     horizon 5    -19   (CI [-69, +32])   <- default
+#     horizon 10   -84   (CI [-135, -34])
+#     uncapped    -132   (CI [-170, -94])
+#
+# So the cap is worth 113 coins over the uncapped version, and the best setting
+# still only draws level with the closed form it was meant to replace.
+DEFAULT_HORIZON = 5
+
+# Chance that a card passing through an opponent's hand is thrown at a moment it
+# would complete your hand — the one place claims enter the sampled valuation.
+#
+# It replaces CLAIM_EFFICIENCY rather than joining it, and is easier to reason
+# about: that constant scaled an abstract count of "opportunities", where this is
+# a probability attached to a specific card in a specific simulated deck.
+CLAIM_ARRIVAL_RATE = 0.4
+
 # How many targets a hand's value may be built from. 1 means a plain maximum.
 #
 # Combining the best four was tried, on the reasoning that two live chances are
@@ -113,6 +145,8 @@ class HeuristicAgent:
         *,
         seed: int | None = None,
         particles: int = DEFAULT_PARTICLES,
+        futures: int = 0,
+        horizon: int = DEFAULT_HORIZON,
         defend: bool = True,
         targets_combined: int = TARGETS_COMBINED,
         name: str = "heuristic",
@@ -121,6 +155,10 @@ class HeuristicAgent:
         self.space = rules.cards
         self.rng = random.Random(seed)
         self.particles = particles
+        # 0 keeps the closed-form valuation; anything higher samples that many
+        # futures per decision instead. See `hand_value_sampled`.
+        self.futures = futures
+        self.horizon = max(1, horizon)
         self.defend = defend
         # 1 reduces hand valuation to a plain maximum over targets; the
         # `heuristic-max` entry in train/evaluate.py uses it to measure what
@@ -142,7 +180,7 @@ class HeuristicAgent:
 
         decision = DecisionType[request.decision]
         if decision is DecisionType.DISCARD:
-            action = self._choose_discard(state)
+            action = self.act_discard(state)
         elif decision is DecisionType.CLAIM:
             action = self._choose_claim(state, request.claimable_slot)
         else:
@@ -167,25 +205,30 @@ class HeuristicAgent:
         self.targets = build_targets(self.rules, self._bonus)
 
     # ----------------------------------------------------------- decisions --
-    def _choose_discard(self, state: PublicState) -> int:
+    def act_discard(self, state: PublicState, particles=None) -> int:
+        """Which card to throw. Public so search can defer to it.
+
+        `particles` lets a caller that has already sampled the belief — PIMC does,
+        for its determinizations — reuse them instead of paying for a second draw
+        and then disagreeing with itself about the world.
+        """
         hand = state.hand
         candidates = [s for s in range(self.space.n_slots) if hand[s] > 0]
         if not candidates:
             return 0
 
-        context = self.valuation_context(state)
-        particles = (
-            self.belief.sample(self.particles)
-            if self.defend and self.particles > 0
-            else []
-        )
+        if particles is None:
+            particles = self._particles()
+        elif not self.defend:
+            particles = []
+        value = self.valuer(state, particles)
         danger = self.danger(candidates, particles, state)
 
         best, best_score = candidates[0], -float("inf")
         for slot in candidates:
             trial = hand[:]
             trial[slot] -= 1
-            score = self.hand_value(trial, context) - DANGER_WEIGHT * danger.get(slot, 0.0)
+            score = value(trial) - DANGER_WEIGHT * danger.get(slot, 0.0)
             if score > best_score:
                 best, best_score = slot, score
         return best
@@ -203,11 +246,11 @@ class HeuristicAgent:
         if call is None:
             return pass_action(self.rules)
 
-        context = self.valuation_context(state)
+        value = self.valuer(state, self._particles())
         # Declining leaves the hand exactly as it is; claiming banks the payout and
         # leaves the remnant. Both sides are in coins.
-        keep = self.hand_value(state.hand, context)
-        take = call.payout + self.hand_value(_spend(probe, call), context)
+        keep = value(state.hand)
+        take = call.payout + value(_spend(probe, call))
         return call_action(self.rules) if take >= keep else pass_action(self.rules)
 
     def _choose_call(self, state: PublicState) -> int:
@@ -215,12 +258,99 @@ class HeuristicAgent:
         if call is None:
             return pass_action(self.rules)
 
-        context = self.valuation_context(state)
-        keep = self.hand_value(state.hand, context)
-        take = call.payout + self.hand_value(_spend(state.hand, call), context)
+        value = self.valuer(state, self._particles())
+        keep = value(state.hand)
+        take = call.payout + value(_spend(state.hand, call))
         return call_action(self.rules) if take >= keep else pass_action(self.rules)
 
     # ------------------------------------------------------------ scoring ---
+    def _particles(self):
+        if self.particles <= 0 or (not self.defend and self.futures <= 0):
+            return []
+        return self.belief.sample(self.particles)
+
+    def valuer(self, state: PublicState, particles):
+        """A function from hand to expected coins, built once per decision.
+
+        Both valuations are expensive to set up and cheap to reuse — the closed
+        form needs the belief's availability vector, the sampled one needs a set of
+        drawn futures — so the setup happens here and every candidate discard is
+        scored against the same one. Comparing candidates against *different*
+        samples would put the noise between them rather than around them.
+        """
+        if self.futures <= 0:
+            context = self.valuation_context(state)
+            return lambda hand: self.hand_value(hand, context)
+        futures = self.sample_futures(state, particles)
+        return lambda hand: self.hand_value_sampled(hand, futures)
+
+    def sample_futures(self, state: PublicState, particles):
+        """Which cards this seat will draw, and which it might get to claim.
+
+        This is the alternative to searching that M4 argued for. A full rollout
+        answers "how does the game end", which turns out to be chaotic — one
+        different discard flips a claim, a claim changes a refill, and every
+        later draw moves. This answers only "which cards reach me", which is
+        smooth: it depends on the deck and on turn order, not on a cascade of
+        decisions. So it absorbs sampling effort productively where the rollout
+        did not.
+
+        Claims enter once, and only in the way the rules allow: a claim must
+        *complete* a hand, so a claimable card can finish a target that is one
+        short and can never advance one that is two short.
+        """
+        space = self.space
+        players = self.rules.play.players
+        if not particles:
+            particles = self.belief.sample(max(1, min(self.futures, self.particles or 8)))
+
+        mine = max(0, min(self.horizon, state.deck_remaining // players))
+        futures = []
+        for i in range(self.futures):
+            particle = particles[i % len(particles)]
+            deck = [slot for slot, n in enumerate(particle.deck) for _ in range(n)]
+            self.rng.shuffle(deck)
+
+            drawn = space.zeros()
+            for slot in deck[:mine]:
+                drawn[slot] += 1
+            claimable = {
+                slot for slot in deck[mine:] if self.rng.random() < CLAIM_ARRIVAL_RATE
+            }
+            futures.append((drawn, claimable))
+        return futures
+
+    def hand_value_sampled(self, hand: Counts, futures) -> float:
+        """Expected coins, as the mean best payout actually reachable.
+
+        Note what this measures compared with the closed form: not
+        `max over targets of payout x P(complete)`, but `E[best payout that
+        completes]`. The difference is that a hand with two live chances is worth
+        more than either alone, and this expresses that without the
+        double-counting that made combining targets fail at M3 — each sampled
+        future contributes exactly one payout, the best one it actually reaches.
+        """
+        n = len(hand)
+        total = 0.0
+        for drawn, claimable in futures:
+            reachable = [hand[i] + drawn[i] for i in range(n)]
+            best = 0
+            for target in self.targets:
+                missing = self._requirements(reachable, target)
+                if missing is None:
+                    continue
+                if missing:
+                    # One short is claimable; two short is not reachable at all.
+                    if len(missing) != 1:
+                        continue
+                    if not any(slot in claimable for slot in missing[0]):
+                        continue
+                payout = self._payout(reachable, target)
+                if payout > best:
+                    best = payout
+            total += best
+        return total / len(futures)
+
     def valuation_context(self, state: PublicState) -> tuple[list[float], float, float, float]:
         """Everything hand valuation needs about the wider game, computed once."""
         unseen = self.belief.expected_unseen()

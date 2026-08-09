@@ -143,29 +143,48 @@ def _tilt(rows: list[list[float]], target: int) -> list[list[float]]:
     so something else must be thinner than I thought" enters the model, and that
     inference is unavailable to a player reading the in-game counter.
     """
+    # Bisect on log-theta for the mean, then build the rows once at the answer.
+    # Searching and constructing in the same loop is the obvious way to write this
+    # and costs ~40x more: it allocates two lists per slot per iteration, when all
+    # the search needs is a single scalar.
+    width = len(rows[0])
     lo, hi = -30.0, 30.0
-    best = rows
-    for _ in range(60):
-        mid = (lo + hi) / 2.0
+    for _ in range(40):
+        mid = (lo + hi) * 0.5
         theta = math.exp(mid)
-        best = []
+        powers = [1.0] * width
+        for k in range(1, width):
+            powers[k] = powers[k - 1] * theta
+
         total = 0.0
         for row in rows:
-            weighted = [p * theta**k for k, p in enumerate(row)]
-            mass = sum(weighted)
-            if mass <= 0.0:
-                best.append(list(row))
-                continue
-            normed = [w / mass for w in weighted]
-            best.append(normed)
-            total += sum(k * p for k, p in enumerate(normed))
+            mass = 0.0
+            weighted_sum = 0.0
+            for k in range(width):
+                w = row[k] * powers[k]
+                mass += w
+                weighted_sum += k * w
+            if mass > 0.0:
+                total += weighted_sum / mass
+
         if abs(total - target) < 1e-9:
             break
         if total < target:
             lo = mid
         else:
             hi = mid
-    return best
+
+    theta = math.exp((lo + hi) * 0.5)
+    powers = [1.0] * width
+    for k in range(1, width):
+        powers[k] = powers[k - 1] * theta
+
+    out = []
+    for row in rows:
+        weighted = [row[k] * powers[k] for k in range(width)]
+        mass = sum(weighted)
+        out.append(list(row) if mass <= 0.0 else [w / mass for w in weighted])
+    return out
 
 
 # --------------------------------------------------------------------------

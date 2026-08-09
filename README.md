@@ -9,18 +9,35 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M3 — it plays, and the belief model earns its keep.** Full game logic, an AEC
-environment, the confirmed payout table, a web table you can sit down and play, a
-two-level belief, a heuristic agent, and an evaluation harness, with 117 tests
-passing.
+**M4 — search failed; sharper beliefs won.** Full game logic, an AEC environment,
+the confirmed payout table, a web table you can sit down and play, a two-level
+belief, three agents, a determinized-search implementation, and an evaluation
+harness, with 133 tests passing.
 
-Measured over 2000 duplicate-dealt games:
+The agent ladder, all measured by duplicate dealing with 4-seat rotation:
+
+| agent | vs greedy | vs heuristic | cost/decision |
+|---|---:|---:|---:|
+| **heuristic-p1024** — 1024 belief particles | — | **+50** [+16, +84] | 248 ms |
+| **heuristic** — belief-driven, expected coins | **+638** [+612, +664] | — | 24 ms |
+| **fast** — cheap valuation, belief defence | +500 [+457, +544] | −104 [−144, −64] | 6 ms |
+| **pimc** — determinized search | — | **−144** [−197, −92] | 250 ms |
+| greedy | — | −638 | 0.02 ms |
+
+Two results, and the contrast between them is the milestone. Determinized search —
+the whole point of M4 — is *worse* than the heuristic it wraps. Spending a
+comparable budget on belief precision instead is better. For almost identical
+compute, one lever is worth −144 and the other +50.
+
+`heuristic` stays the default at 48 particles rather than adopting the stronger
+setting, because a tenfold cost increase to buy 8% of its edge over greedy is a bad
+trade for the thing every matchup is measured against. `heuristic-p1024` is there
+for hint mode, where a quarter-second is free.
+
+Two other numbers worth keeping in view:
 
 | | |
 |---|---|
-| heuristic vs greedy | **+638 coins/game**, 95% CI [+612, +664] |
-| win rate | 63.1% against three greedy opponents (25% is level) |
-| P(finish above 1000) | 84.5% |
 | what discard safety is worth | **+173 coins/game** against an identical agent with defence off |
 | composition estimate vs the in-game counter | **9.3× more accurate** |
 
@@ -43,7 +60,7 @@ M1  engine + environment                   <- done
 M2  web GUI, human-playable                <- done
 M0b capture real payouts + card art        <- payouts confirmed; card art still open
 M3  observation encoder, belief, heuristic agent, eval harness   <- done
-M4  PIMC agent
+M4  PIMC agent                             <- built and measured; does not beat M3
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
 M7  hint mode + overlay
@@ -69,9 +86,15 @@ is the easiest way to fool yourself here.
 The `by seat` line is the check that this worked: with duplicate dealing the
 spread across seats is ~58 coins, against per-game swings in the thousands.
 
-Registered agents: `random`, `greedy`, `heuristic`, plus `heuristic-blind`
-(defence off), `heuristic-fast` (fewer particles), and `heuristic-combined` — the
-ablations that produced the numbers above.
+Registered agents: `random`, `greedy`, `heuristic`, `fast`, `heuristic-p1024` and
+`pimc`, plus the ablations that produced the numbers below — `heuristic-blind`
+(defence off), `heuristic-p16` (the prior PIMC actually runs on),
+`heuristic-combined`, `heuristic-mc` (sampled valuation), `pimc-d12` (truncated
+rollouts) and `pimc-calls` (search only call decisions). Every negative result in
+this README can be re-run from that list.
+
+Matchups involving `pimc` cost about 250 ms a decision, so they are run over fewer
+seeds; everything else is comfortable at 200-500.
 
 ### Diagnostics
 
@@ -251,8 +274,8 @@ the max-EV and safe agents should disagree about.
 ```
 rules/pokajan_v1.yaml     every rule number, and nothing else
 pokajan/core/             cards, rules, hand evaluation, action space
-pokajan/envs/             environment, observations, belief         (M1/M3)
-pokajan/agents/           heuristic, PIMC, neural                   (M3-M6)
+pokajan/envs/             environment, observations, belief, determinize (M1/M3/M4)
+pokajan/agents/           heuristic, fast, PIMC, neural             (M3-M6)
 pokajan/train/            evaluation now; behaviour cloning, PPO    (M5+)
 pokajan/server/           protocol + web app                        (M2)
 pokajan/vision/           screen reading                            (M8)
@@ -274,13 +297,128 @@ Three files are load-bearing beyond their size:
 
 ### Things tried that did not work
 
-Kept because a measured negative is worth more than an untested idea, and both are
+Kept because a measured negative is worth more than an untested idea, and each is
 one flag away from being re-run against a better model.
 
-- **Valuing a hand by combining its best few targets** instead of taking the best
-  one. A maximum cannot see that two live chances beat one, which looked like a
-  clear gap. Measured at **-38 coins/game** (95% CI [-89, +13]) over 480 games —
-  targets overlap too heavily for independence to hold. See `TARGETS_COMBINED`.
+**Perfect-Information Monte Carlo (all of M4).** Sample worlds from the belief,
+play every candidate action to the end of the game in each, take the action that
+averages most coins. It came out at **−144 coins/game** (95% CI [−197, −92])
+against the heuristic it wraps, at 250 ms a decision.
+
+The interesting part is why, because it is a fact about Pokajan rather than about
+the implementation. Instrumenting real decisions showed the search overruling the
+heuristic on 62% of discards and agreeing on every call and chain, so the damage
+was entirely in discard selection. Measuring the signal directly:
+
+| | |
+|---|---|
+| mean difference between the top two discards | **29 coins** |
+| standard deviation of that difference, per world | **279 coins** |
+| standard error at 16 determinizations | **70 coins** — 2.4× the effect |
+| worlds where both discards ended identically | 67% |
+| determinizations needed to resolve the effect | **~481** (≈8 s/decision) |
+
+Changing a discard can flip whether somebody claims it; a claim changes how many
+cards get refilled, which shifts every subsequent draw for everyone. Two thirds of
+the time nothing diverges and the paired comparison is clean, but the other third
+explodes, and that tail is thirty times larger than the effect being measured. The
+search was picking among the heuristic's top three essentially at random, and
+replacing an informative ranking with noise costs exactly what you would expect.
+
+What was ruled out along the way, so the conclusion stands on evidence:
+
+- *A broken determinizer* — no. Handed the true hidden state, it reconstructs the
+  real engine exactly across 1200 decisions and every state field; that is now an
+  invariant test.
+- *A weak rollout policy* — no. Given perfect information it beats the heuristic by
+  **+519 coins/game**.
+- *A prior handicap* — mostly no. PIMC's internal heuristic runs on 16 belief
+  particles rather than 48, worth −38 (95% CI [−89, +13], not significant).
+- *Rollout chaos* — partly. Truncating rollouts to 12 rounds recovers about a third
+  of the gap (−144 → −85) and does not rescue it.
+- *Searching the wrong decisions* — searching only calls, claims and chains and
+  leaving discards to the heuristic lands at −68 (CI [−141, +5], not significant),
+  i.e. level with its own prior. Search adds nothing there either.
+
+More determinizations is the obvious remedy and the measurement prices it: ~481 per
+decision, thirty times the current budget, for one decision type. That is not a
+tuning problem. It is why the roadmap goes to a learned policy at M5 rather than to
+deeper search.
+
+**Replacing the completion probability with a Monte-Carlo one.** The heuristic
+prices a hand with a crude closed form — requirements treated as independent, a
+hand-tuned claim-efficiency constant, `(1−p)^opportunities`. The obvious upgrade is
+to sample futures from the belief instead and take `E[best payout reachable]`,
+which also prices two live chances correctly without the double-counting that sank
+the idea above. It is cheap (42 ms a decision) and it samples a quantity that does
+*not* diverge chaotically, so it avoids what killed PIMC.
+
+It came out at **−19 coins/game** (95% CI [−69, +32]) — level with the closed form,
+not better. Worth keeping for the one thing it did teach: the first version scored
+−132, and the whole difference was a horizon cap. Handed every card it will draw
+for the rest of the game, a sampled hand can assemble almost any target, because
+nothing in the sample makes it discard down to seven. Modelling the future without
+modelling the hand limit measures what is in the deck rather than what the hand can
+become. The sweep is recorded on `DEFAULT_HORIZON`.
+
+**Valuing a hand by combining its best few targets** instead of taking the best
+one. A maximum cannot see that two live chances beat one, which looked like a clear
+gap. Measured at **−38 coins/game** (95% CI [−89, +13]) over 480 games — targets
+overlap too heavily for independence to hold. See `TARGETS_COMBINED`.
+
+### Does more compute help?
+
+Asked directly, with a budget of five seconds per decision — comfortable for a live
+hint at M7 or for labelling training data at M5, and unusable inside a PPO loop.
+Three levers, all measured against the same heuristic:
+
+| lever | cost/decision | result |
+|---|---:|---|
+| **belief precision**, 48 → 1024 particles | 24 → 248 ms | **+50** [+16, +84], over 1280 games |
+| sampled valuation, 32 futures | 24 → 42 ms | −19 [−69, +32], not significant |
+| determinized search, 16 worlds | 24 → 250 ms | −144 [−197, −92] |
+
+Only the first one buys anything, and the reason is visible *before* running any
+matchup — which makes it a useful thing to check first next time. Both the belief
+and the search produce a noisy estimate of a quantity that differs between
+candidate discards. What matters is the ratio:
+
+| estimator | its noise ÷ the spread it must resolve |
+|---|---|
+| discard danger, 48 particles | **0.38** |
+| PIMC rollout value, 16 determinizations | **2.4** |
+
+Both converge with more samples. The difference is the rate at which they arrive
+somewhere useful: the danger estimate is already inside the signal and reaches
+0.10 for 20× the compute, while the rollout estimate starts at six times worse and
+needs about 30× the budget merely to draw level — eight seconds a decision, for one
+decision type. Cheap to measure, and it would have priced the whole milestone in an
+afternoon.
+
+The broader read, which shapes M5: this game's decisions are dominated by
+quantities the heuristic already computes directly — what a hand is worth and what
+a discard risks. Depth adds variance rather than insight, and the leverage is in
+knowing the cards better, not in looking further ahead.
+
+### What the failed milestone left behind
+
+Chasing the search produced four things that outlive it, three of which M5 needs:
+
+- **A search fast path on the engine.** `pending_seats()` / `apply()` answer the
+  same questions as `pending_decisions()` / `submit()` without building a
+  `PublicState` per seat — measured **79× cheaper**, and both public methods are
+  now implemented in terms of them so there is no second copy of the turn logic.
+- **`envs/determinize.py`**, which rebuilds a playable game from a `PublicState`
+  and a belief particle *and nothing else*. That constraint is the whole reason it
+  is written this way: at M8 the opponent is the real game and there is no engine
+  to clone, so anything that cannot search from a reconstructed public view is not
+  the agent this project is building.
+- **`FastAgent`** — the rollout policy's cheap valuation with belief-supplied
+  defence. It gives up 104 coins/game against the heuristic and runs 3× faster
+  (6 ms vs 19 ms a decision), which is the trade a self-play loop wants when the
+  opponent pool is queried millions of times.
+- **A 3.5× faster belief posterior**, from separating the bisection that finds the
+  deck-total tilt from the construction of the rows it tilts.
 
 ## Testing
 

@@ -91,6 +91,80 @@ def test_claims_cannot_advance_a_hand_that_is_two_cards_short(fixture_rules):
     assert two_short_with_endless_claims == pytest.approx(one_short_draws_only, rel=1e-6)
 
 
+def test_sampled_valuation_obeys_the_same_claim_rule(fixture_rules):
+    """The rule that survived being reimplemented.
+
+    `completion_probability` and `hand_value_sampled` are two independent answers
+    to the same question, and both have to honour the one rule that governs claims:
+    a claim must *complete* a hand, so it can finish a target that is one card
+    short and can never advance one that is two short. Getting that wrong in either
+    place inflates exactly the long-shot hands where the big payouts live.
+
+    Futures are supplied directly here — no sampling — so the assertion is on the
+    rule, not on a draw.
+    """
+    space = fixture_rules.cards
+    blue = 0
+    wanted = space.slot("c", blue)
+
+    agent = HeuristicAgent(fixture_rules, seed=1, futures=8, particles=0)
+    agent.start_game(state_with(fixture_rules, space.zeros()))
+
+    # A single future in which the wanted card never arrives by draw, but does pass
+    # through somebody's discard.
+    futures = [(space.zeros(), {wanted})]
+
+    one_short = space.zeros()
+    one_short[wanted] = 2
+    assert agent.hand_value_sampled(one_short, futures) == 850   # 700 mono + 150 bonus
+
+    two_short = space.zeros()
+    two_short[wanted] = 1
+    assert agent.hand_value_sampled(two_short, futures) == 0
+
+    # The same hand, with the card drawn rather than claimed, is one short again.
+    drawn = space.zeros()
+    drawn[wanted] = 1
+    assert agent.hand_value_sampled(two_short, [(drawn, {wanted})]) == 850
+
+
+def test_sampled_valuation_never_exceeds_what_a_hand_pays(fixture_rules):
+    """It is an expectation over reachable payouts, so the best payout bounds it."""
+    space = fixture_rules.cards
+    agent = HeuristicAgent(fixture_rules, seed=1, futures=8, particles=0)
+    agent.start_game(state_with(fixture_rules, space.zeros()))
+
+    everything = set(range(space.n_slots))
+    generous = [(space.zeros(), everything) for _ in range(4)]
+    best_possible = 850  # monochrome four-group Right, 800 + 50 bonus, or a mono triple
+
+    assert agent.hand_value_sampled(space.zeros(), generous) <= best_possible
+
+
+def test_the_horizon_caps_how_far_ahead_a_future_reaches(fixture_rules):
+    """Without a cap the sampled hand ignores the hand limit and stops discriminating.
+
+    A seat handed every card it will draw for the rest of the game can assemble
+    almost any target, because nothing in the sample makes it discard down to seven.
+    The horizon is what keeps the reachable hand near a size a real one could hold —
+    and the measured cost of getting it wrong was 113 coins/game.
+    """
+    space = fixture_rules.cards
+    state = state_with(fixture_rules, space.zeros(), deck_remaining=40)
+
+    short = HeuristicAgent(fixture_rules, seed=4, futures=4, horizon=1, particles=4)
+    long = HeuristicAgent(fixture_rules, seed=4, futures=4, horizon=9, particles=4)
+    for agent in (short, long):
+        agent.start_game(state)
+        agent.belief.observe(state)
+
+    drawn_short = sum(sum(d) for d, _ in short.sample_futures(state, short._particles()))
+    drawn_long = sum(sum(d) for d, _ in long.sample_futures(state, long._particles()))
+
+    assert drawn_short < drawn_long
+    assert drawn_short == 4 * 1
+
+
 def test_claims_help_a_hand_that_is_one_card_short(fixture_rules):
     unseen = [1.0] * 40
     without = completion_probability([(0,)], unseen, 40.0, my_draws=10, claim_ops=0.0)
