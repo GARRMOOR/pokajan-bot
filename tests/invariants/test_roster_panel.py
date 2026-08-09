@@ -165,13 +165,41 @@ def test_an_unknown_group_is_refused(book):
 # ------------------------------------------------------------------ naming ----
 
 def test_card_art_filenames_resolve_to_canonical_ids(book):
-    """The art is named by hand, and the names drift."""
+    """The art is named by hand, and the names drift.
+
+    Punctuation is folded away rather than aliased one name at a time, so a filename
+    keeping an apostrophe resolves on its own -- as will the next name like it.
+    """
     assert book.resolve("gawr_gura") == "gawr_gura"
     assert book.resolve("GAWR_GURA") == "gawr_gura"
-    # Real cases from data/cards/: an apostrophe the ids omit, and shortened names.
     assert book.resolve("ninomae_ina'nis") == "ninomae_inanis"
-    assert book.resolve("flare") == "shiranui_flare"
-    assert book.resolve("lui") == "takane_lui"
+    assert book.resolve("la+plus_darkness") == book.resolve("laplus_darkness")
+
+
+def test_the_roster_covers_every_group_the_game_draws(book):
+    """Including the two that only turned up when the player listed what art they lacked.
+
+    An unknown group refuses rather than guessing, so a missing branch is safe but
+    useless -- the reader simply cannot read a round that deals it.
+    """
+    labels = {group.id for group in book.groups}
+
+    assert {"advent", "regloss"} <= labels, "EN Advent and DEV_IS ReGLOSS are dealt"
+    assert len(book.characters) == 62
+
+
+def test_graduated_members_are_left_out(book):
+    """The game deals the current roster, so Gen1 and Gen2 are fours, not fives.
+
+    Inferred from the art the player holds against the list of what they still need:
+    every holomem the game can deal is one they expect to capture, and Mel and Aqua are
+    on neither list. Consistent with Gen3 without Rushia and Gen4 without Coco, which the
+    observed panel counts had already pinned at four.
+    """
+    for group_id, size in (("gen1", 4), ("gen2", 4), ("gen3", 4), ("gen4", 4)):
+        assert book.by_id(group_id).size == size
+    assert "yozora_mel" not in book.characters
+    assert "minato_aqua" not in book.characters
 
 
 def test_an_unrecognised_filename_is_reported_not_guessed(book):
@@ -184,9 +212,9 @@ def test_an_unrecognised_filename_is_reported_not_guessed(book):
     assert book.resolve("shirakami_fubuko") is None
 
     resolved, unresolved, missing = book.coverage(
-        ["gawr_gura", "flare", "not_a_holomem"]
+        ["gawr_gura", "ninomae_ina'nis", "not_a_holomem"]
     )
 
-    assert resolved == {"gawr_gura": "gawr_gura", "flare": "shiranui_flare"}
+    assert resolved == {"gawr_gura": "gawr_gura", "ninomae_ina'nis": "ninomae_inanis"}
     assert unresolved == ["not_a_holomem"]
     assert "mori_calliope" in missing

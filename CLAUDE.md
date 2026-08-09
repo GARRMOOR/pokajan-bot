@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 236 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 238 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
@@ -163,9 +163,14 @@ Order that actually works, with the risk concentrated late:
    only catches a label misread as a **differently sized** group.
    A count that is not 3, 4 or 5 means the panel is occluded — a payout frame measured
    [4,3,2,2] between two clean [4,4,4,5]s. Free detector, no extra machinery.
-   Card-art filenames drift (an apostrophe, three shortened names, one typo), so the
-   resolver maps via an alias table and **reports what it cannot map rather than fuzzy
-   matching** — `usada_pekore` is one letter from a real holomem.
+   Card-art filenames drift, so punctuation is normalised away and anything still
+   unrecognised is **reported, never fuzzy-matched** — one file was once `usada_pekore`,
+   a single letter from a real holomem. Reporting got all of them fixed at source in one
+   message, which is the workflow: tell the user the filename.
+   **The table excludes graduated members** — Gen1 and Gen2 are fours, not fives — which
+   was inferred from the art the user holds against the list of what they still lack, and
+   is consistent with Gen3 (no Rushia) and Gen4 (no Coco) at four. Coverage now matches
+   their missing list exactly, 16 for 16, which is the check that the whole table is right.
    Still to do: classifying the four labels themselves, ranks, and the
    newest-card-per-seat read in step 5.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This

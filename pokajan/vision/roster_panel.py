@@ -45,6 +45,16 @@ class PanelError(ValueError):
     """The panel could not be read into a roster."""
 
 
+def _normalise_id(name: str) -> str:
+    """Fold away the punctuation that hand-typed filenames disagree about.
+
+    Apostrophes and plus signs appear in real holomem names, and whether a filename keeps
+    them is a coin toss. Everything else is left alone -- this normalises spelling, it does
+    not guess at it.
+    """
+    return "".join(c for c in name.strip().lower() if c.isalnum() or c == "_")
+
+
 @dataclass(frozen=True)
 class Group:
     """One hololive branch the game can draw."""
@@ -99,14 +109,23 @@ class GroupBook:
     def resolve(self, name: str) -> str | None:
         """The canonical id for a card-art filename, or None if it is not recognised.
 
-        Aliases first, then an exact match. Deliberately no fuzzy matching: the art
-        includes `usada_pekore`, one letter from a real holomem, and a resolver willing
-        to close a one-letter gap would just as happily map a genuine holomem onto the
-        wrong one. Unrecognised is a useful answer; wrong is not.
+        Punctuation is normalised away, so `ninomae_ina'nis` matches `ninomae_inanis`
+        without needing an entry in the alias table -- and so will any future name whose
+        only difference is an apostrophe or a plus sign.
+
+        Beyond that, aliases and then an exact match. **Deliberately no fuzzy matching.**
+        One art file was once named `usada_pekore`, a single letter from a real holomem,
+        and anything willing to close a one-letter gap would as readily map a genuine
+        holomem onto the wrong one. Unrecognised is a useful answer that gets a filename
+        fixed in one message; wrong is a holomem the reader can never name.
         """
-        key = name.strip().lower()
-        key = self.aliases.get(key, key)
-        return key if key in self.characters else None
+        key = _normalise_id(name)
+        key = _normalise_id(self.aliases.get(key, key))
+        return self._normalised.get(key)
+
+    @property
+    def _normalised(self) -> dict[str, str]:
+        return {_normalise_id(c): c for c in self.characters}
 
     def coverage(self, art_names: list[str]) -> tuple[dict[str, str], list[str], list[str]]:
         """What art resolves to, what does not, and which holomem have none.

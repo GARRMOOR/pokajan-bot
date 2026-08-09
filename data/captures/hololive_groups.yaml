@@ -29,11 +29,15 @@ groups:
     confirmed: capture
     members: [tokino_sora, roboco, azki, sakura_miko, hoshimachi_suisei]
 
+  # Four, not five: the game leaves graduated and terminated members out, so Mel is
+  # absent. Inferred from the art the player has and the list of what they still need --
+  # every holomem the game can deal is one they expect to capture, and she is not on it.
+  # The same pattern already explains Gen3 without Rushia and Gen4 without Coco.
   - id: gen1
     label: "Gen1"
     badge: "1"
-    size: 5
-    members: [yozora_mel, aki_rosenthal, akai_haato, natsuiro_matsuri, shirakami_fubuki]
+    size: 4
+    members: [aki_rosenthal, akai_haato, natsuiro_matsuri, shirakami_fubuki]
 
   # Fubuki is in both Gen1 and GAMERS, and her card art carries a per-group variant. The
   # player's judgement is that the game never draws both as goals in one round, so
@@ -46,11 +50,12 @@ groups:
     confirmed: capture
     members: [shirakami_fubuki, ookami_mio, nekomata_okayu, inugami_korone]
 
+  # Four for the same reason: Aqua has graduated.
   - id: gen2
     label: "Gen2"
     badge: "2"
-    size: 5
-    members: [minato_aqua, murasaki_shion, nakiri_ayame, yuzuki_choco, oozora_subaru]
+    size: 4
+    members: [murasaki_shion, nakiri_ayame, yuzuki_choco, oozora_subaru]
 
   - id: gen3
     label: "Gen3"
@@ -76,7 +81,7 @@ groups:
     label: "holoX"
     badge: "X"
     size: 5
-    members: [laplus_darknesss, takane_lui, hakui_koyori, sakamata_chloe, kazama_iroha]
+    members: [laplus_darkness, takane_lui, hakui_koyori, sakamata_chloe, kazama_iroha]
 
   - id: myth
     label: "Myth"
@@ -110,17 +115,30 @@ groups:
     size: 3
     members: [vestia_zeta, kaela_kovalskia, kobo_kanaeru]
 
-# Card art filenames are typed by hand as captures come in, so they do not always match
-# the canonical ids above. Rather than renaming files -- which would have to happen again
-# every session -- the resolver in pokajan/vision/roster_panel.py maps them, and reports
-# anything it cannot map instead of guessing.
+  - id: advent
+    label: "Advent"
+    badge: "Ad"
+    size: 5
+    members: [shiori_novella, koseki_bijou, nerissa_ravencroft, fuwawa_abyssgard,
+              mococo_abyssgard]
+
+  - id: regloss
+    label: "ReGLOSS"
+    badge: "Re"
+    size: 5
+    members: [otonose_kanade, hiodoshi_ao, ichijou_ririka, juufuutei_raden,
+              todoroki_hajime]
+
+# Punctuation is normalised away before lookup, so an apostrophe in a filename needs no
+# entry here: ninomae_ina'nis resolves on its own, as will any name like it.
 #
-# Real cases found in data/cards/: an apostrophe the ids omit, three names shortened to
-# one word, and one outright typo. The typo is listed because guessing at it is exactly
-# what a resolver must not do -- a one-letter edit could as easily be a different holomem.
-aliases:
-  "ninomae_ina'nis": ninomae_inanis
-  "flare": shiranui_flare
-  "lui": takane_lui
-  "la+_darkness": laplus_darknesss
-  "usada_pekore": usada_pekora        # typo; keep until the file is renamed
+# This table is only for spellings normalisation cannot reach. It is empty because the
+# player renamed the files that needed it -- three names shortened to one word (flare,
+# lui, la+_darkness) and one typo (usada_pekore) each appeared once and were fixed at
+# source, which is better than carrying a mapping forever.
+#
+# NEVER replace an entry here with fuzzy matching. That typo was one letter from a real
+# holomem, and a resolver willing to close a one-letter gap would as readily map a genuine
+# holomem onto the wrong one. `coverage` reports the filename instead, and the player
+# fixes it -- which is what happened, and it took one message.
+aliases: {}
