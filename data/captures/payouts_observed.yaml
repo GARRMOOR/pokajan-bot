@@ -1,0 +1,56 @@
+# Payouts observed in real games, transcribed from screenshots in data/tables/.
+#
+# The table in rules/pokajan_v1.yaml was taken from the in-game payout list. These
+# are different evidence: whole scoring *events* watched end to end, which check
+# the amount, who paid, how it split, and what happened at the coin floor all at
+# once. Two of them settle things the payout list could not.
+
+- source: data/tables/20260809004802_1.jpg
+  caller: "zero-shi (right seat)"
+  label_shown: "3-Card 120"
+  hand_type: triple
+  group_size: null
+  monochrome: false          # meld shown was blue + pink + blue of one character
+  bonus_copies: 0
+  claimed: false             # all three opponents paid, so this was self-drawn
+  caller_gained: 120
+  payers: [-40, -40, -40]
+  note: >
+    Confirms payer.otherwise = split_others and that 120 divides evenly three ways.
+    The meld is rendered face-up in the centre during the payout, so the cards a
+    call consumed are readable at the moment it happens rather than inferred.
+
+- source: data/tables/20260809005102_1.jpg
+  caller: "zero-shi (right seat)"
+  hand_type: group
+  group_size: 4
+  monochrome: true
+  bonus_copies: 1
+  claimed: true              # only the discarder lost coins
+  caller_gained: 930
+  payers: [-930]
+  payer_final: 0
+  ended_game: true
+  note: >
+    930 pins the hand shape uniquely. Every base payout plus 90k for k in 0..3
+    gives exactly one match: 840 + 90x1. And a triple's scoring set is three copies
+    of a single character, so it can only ever carry 0 or 3 bonus copies -- never
+    1. So this must be a monochrome four-group containing the bonus holomem, which
+    confirms the 840 cell, the +90 additive bonus, and bonus.applies_to =
+    scoring_set together.
+
+    Also confirms payer.when_claimed = discarder: three players were at the table
+    and only the discarder lost anything.
+
+# --- the coin accounting, which is the sharpest check available -----------------
+#
+# Final coins in that game: 720 + 1040 + 2270 + 0 = 4030, against 4 x 1000 dealt.
+#
+# Coins are not conserved, and now that is observed rather than inferred from a
+# description. 30 were minted somewhere earlier in the round by the asymmetric
+# floor -- a caller collecting more than the payer could cover. The engine models
+# this and the test suite asserts sum(coins) == 4000 + minted precisely so it
+# cannot regress; this is the real game agreeing.
+#
+# The same screen also confirms the coin-floor ending in words:
+# "Ahimsa's score hit 0. Ending the game."
