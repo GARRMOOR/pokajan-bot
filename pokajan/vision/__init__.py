@@ -123,8 +123,26 @@ depends on:
   cells, and the placeholder is a flat uniform grey that a mean-colour test
   separates from artwork without any character recognition at all.
 
-  The panel crops portraits head-and-shoulders while cards show fuller art, so
-  matching between them needs a crop step.
+  **The panel's portraits cannot be read with the card art, and they should not have
+  to be.** Matching the panel's head-and-shoulders crops against card templates
+  cropped to their head region scores 1/17 -- every cell lands around 0.2 to 0.36,
+  far under the 0.45 the matcher requires, so a reader built that way refuses the
+  whole roster. A crop step is not enough; the portraits are a genuinely different
+  rendering.
+
+  The way round it is not a second template set. **The four group labels are enough
+  to determine the entire roster**, because the game draws real hololive branches and
+  their membership is public knowledge rather than per-game. Every group size observed
+  is a canonical one -- 4/4/3/5, 4/4/4/3 and 4/4/4/5, against GAMERS and Gen 3-5 at
+  four, the ID generations at three, and Gen 0-2, Myth and holoX at five -- and the
+  4/4/4/5 round was exactly GAMERS, Gen 4, Gen 5 and Myth.
+
+  So reading the roster is: classify four short labels ("Ga", "4", "5", "My"), look
+  their members up in a committed table, and cross-check the count against the
+  non-placeholder cells in each row -- which is a flat-grey test needing no
+  recognition at all. That replaces recognising up to twenty portraits with a
+  four-way classification and an arithmetic check, and the check is what catches a
+  misread label rather than trusting it.
 
 * **The bonus holomem is displayed as a full card** beside that panel, under the
   word BONUS, all round. So it reuses the same templates as hands and discards

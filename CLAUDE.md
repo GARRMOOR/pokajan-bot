@@ -146,10 +146,18 @@ Order that actually works, with the risk concentrated late:
    counters, exemplars in the committed `data/captures/digits.yaml`. Every failure there
    was segmentation, never a mismatched glyph — see that module, and note that the boxes
    in `layout.py` and the thresholds in `digits.py` are two halves of one decision.
-   **The digit exemplars are missing a 5**, so any number containing one is refused. It
-   needs a capture with a 5 in a coin total or the deck counter.
-   Still to do: ranks, the group panel's head-and-shoulders portraits — a separate
-   template set from the cards — and the newest-card-per-seat read in step 5.
+   **The digit exemplars are missing a 5**, so any number containing one is refused —
+   safe, and not blocking anything yet. It needs a capture with a 5 in a coin total or
+   the deck counter. The Gen 5 card badge and the group panel's row labels were both
+   tried and neither works: the badge's white body fragments around its pink stroke.
+   **Do not read the roster from the panel's portraits.** Card art matched against them
+   scores 1/17, all far under the refusal threshold — a crop step is not enough. Read
+   the four group *labels* instead and look their members up: the game uses real
+   hololive branches, every observed group size is canonical, and a four-way
+   classification plus a cell count beats recognising twenty portraits. See
+   `pokajan/vision/__init__.py`.
+   Still to do: that group-label lookup table, ranks, and the newest-card-per-seat read
+   in step 5.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like
