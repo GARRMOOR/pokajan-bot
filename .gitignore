@@ -21,3 +21,6 @@ data/**
 !data/captures/README.md
 !data/**/*.yaml
 !data/**/*.md
+
+# Machine-specific overlay geometry — a property of a monitor, not the project.
+overlay.json

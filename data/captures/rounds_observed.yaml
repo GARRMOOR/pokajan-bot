@@ -31,7 +31,10 @@ frames:
     coins: {bottom: 1780, left: 780, top: 420, right: 1020}
     ranks:  {bottom: 1st, left: 3rd, top: 4th, right: 2nd}
     hand_sizes: {bottom: 7, left: 7, top: 7, right: 7}
-    seat_to_act: null          # no gate lit, no seat holding a detached card
+    # The turn gate flashes rather than staying lit, so a null here means "caught in
+    # the dark phase", not "nobody to act". Confirmed by the player after these two
+    # frames disagreed about it.
+    seat_to_act: null          # gate dark this frame, and no seat holds a detached card
     discards_visible:
       bottom: [Himemori Luna, Tsunomaki Watame, Shishiro Botan, Tokoyami Towa, Amane Kanata]
       left:   [Shirakami Fubuki, "Myth", Tokoyami Towa, Tsunomaki Watame, Yukihana Lamy]

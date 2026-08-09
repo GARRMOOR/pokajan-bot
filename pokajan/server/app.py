@@ -102,6 +102,7 @@ class Session:
         }
         self.history: list[dict] = []
         self._events_sent = 0
+        self._hint_cache: tuple[tuple, dict] | None = None
         self._run_bots()
         self._snapshot()
 
@@ -166,6 +167,12 @@ class Session:
         The wall time is part of the answer, not diagnostics. The real game allows
         about ten seconds a turn, and whether the overlay can afford 1024 particles
         is a question only a measurement answers.
+
+        One answer per position, cached. Not for speed -- two surfaces now read this,
+        the browser panel and the overlay, and the advisor genuinely resamples: six
+        draws on one opening position produced three different recommended cards. Two
+        panels contradicting each other over the same hand would destroy the thing
+        the reasoning text exists to build.
         """
         mine = next(
             (r for r in self.engine.pending_decisions() if r.seat == self.human_seat),
@@ -174,11 +181,15 @@ class Session:
         if mine is None:
             return {"type": "hint", "hint": None, "reason": "nothing to decide"}
 
+        key = (mine.state.turn_index, mine.decision, self.hint_particles)
+        if self._hint_cache is not None and self._hint_cache[0] == key:
+            return self._hint_cache[1]
+
         self.advisor.agent.particles = self.hint_particles
         started = time.perf_counter()
         rec = self.advisor.recommend(mine)
         elapsed = (time.perf_counter() - started) * 1000.0
-        return {
+        reply = {
             "type": "hint",
             "hint": asdict(rec),
             "ms": round(elapsed, 1),
@@ -186,6 +197,8 @@ class Session:
             "turn_index": mine.state.turn_index,
             "decision": mine.decision,
         }
+        self._hint_cache = (key, reply)
+        return reply
 
     def payload(self) -> dict:
         pending = self.engine.pending_decisions()
@@ -217,8 +230,47 @@ class Session:
         }
 
 
+class AdviceHub:
+    """Fan-out of advice to read-only observers.
+
+    The overlay is a renderer, not a client: it never acts, and it must not be able
+    to. Giving it a separate one-way socket makes that structural instead of a
+    promise -- there is no message it could send that this end would act on.
+
+    It is also the topology M8 needs. Today a `Session` produces the advice and the
+    overlay renders it; when the screen reader arrives it becomes the producer and
+    the renderer does not change.
+    """
+
+    def __init__(self) -> None:
+        self.observers: set[WebSocket] = set()
+
+    def attached(self) -> bool:
+        return bool(self.observers)
+
+    async def broadcast(self, message: dict) -> None:
+        """Send to every observer, dropping any that have gone away.
+
+        A dead socket must never take the game down with it -- the overlay is an
+        accessory, and the round is the thing that matters.
+        """
+        if not self.observers:
+            return
+        text = json.dumps(message)
+        for socket in list(self.observers):
+            try:
+                await socket.send_text(text)
+            except Exception:
+                self.observers.discard(socket)
+
+
 def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
     app = FastAPI(title="Pokajan")
+    hub = AdviceHub()
+    # The session the overlay follows. Several browser tabs each get their own game,
+    # and the most recent one wins -- an overlay pinned to a game nobody is looking
+    # at would be worse than one that follows the active tab.
+    live: dict[str, Session] = {}
 
     if WEB_DIR.exists():
         app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
@@ -230,11 +282,50 @@ def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
             return HTMLResponse("<h1>web/index.html is missing</h1>", status_code=500)
         return FileResponse(page)
 
+    @app.get("/overlay", response_class=HTMLResponse)
+    async def overlay_page():
+        page = WEB_DIR / "overlay.html"
+        if not page.exists():
+            return HTMLResponse("<h1>web/overlay.html is missing</h1>", status_code=500)
+        return FileResponse(page)
+
+    @app.websocket("/overlay/ws")
+    async def overlay_ws(socket: WebSocket):
+        await socket.accept()
+        hub.observers.add(socket)
+        session = live.get("session")
+        await socket.send_text(json.dumps(
+            session.hint() if session else {"type": "hint", "hint": None, "reason": "no game"}
+        ))
+        try:
+            # Reads only to notice the socket closing. Anything the overlay sends is
+            # discarded on purpose: a renderer that could act would eventually be
+            # given a button, and then it is a second player.
+            while True:
+                await socket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            hub.observers.discard(socket)
+
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
         await socket.accept()
         session = Session(rules, human_seat=human_seat, seed=None)
+        live["session"] = session
+
+        async def push_to_overlay() -> None:
+            """Advice reaches the overlay unasked, unlike the browser panel.
+
+            Only computed when something is actually watching, which keeps the cost
+            of an unused overlay at zero. Sent after the browser's own update so a
+            slow hint delays only the accessory.
+            """
+            if hub.attached():
+                await hub.broadcast(session.hint())
+
         await socket.send_text(json.dumps(session.payload()))
+        await push_to_overlay()
         try:
             while True:
                 message = json.loads(await socket.receive_text())
@@ -262,6 +353,9 @@ def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
                             continue
                         session.hint_particles = want
                     await socket.send_text(json.dumps(session.hint()))
+                    # Cached, so this costs nothing and guarantees the two surfaces
+                    # show the same advice rather than two independent draws.
+                    await push_to_overlay()
                     continue
                 else:
                     await socket.send_text(
@@ -269,6 +363,7 @@ def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
                     )
                     continue
                 await socket.send_text(json.dumps(session.payload()))
+                await push_to_overlay()
         except WebSocketDisconnect:
             return
 

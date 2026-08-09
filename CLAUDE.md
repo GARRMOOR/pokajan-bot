@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 142 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 148 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy and torch are training-only** (`requirements-train.txt`) and *not
@@ -65,7 +65,19 @@ wrong and not obvious from reading the code.
 - **Claim windows must ask every eligible seat against one frozen snapshot**, with
   nothing mutating until all have answered.
 - **Vacuous assertions have slipped into this suite before** (`assert x == y or True`).
-  A test that cannot fail is worse than a missing one.
+  A test that cannot fail is worse than a missing one, and both later cases were
+  subtler than that one: a test of cache-key collisions that picked two seeds whose
+  keys did not actually collide, and a test of idempotence that the cache satisfied
+  without the code under test ever running twice. Neither looked wrong. **For any test
+  guarding a specific regression, break the code and watch it fail** — cheap, and it
+  is the only thing that distinguishes a guard from decoration.
+
+- **The advisor is the only thing that talks to a human**, and its failure mode is a
+  plausible sentence rather than a crash. Never let generated text imply more
+  certainty than the number behind it: `_confidence` measures only whether the
+  ranking survives resampling the belief, so below `TOSS_UP` it must say "coin flip"
+  and name no deciding reason. Opening discards genuinely are toss-ups — six draws at
+  1024 particles on one position gave three different answers.
 
 ## Do not re-try these — they are measured negatives
 
@@ -97,8 +109,20 @@ Order that actually works, with the risk concentrated late:
 1. ~~Hint panel in the existing web UI~~ — **done.** `agents/advisor.py` is the only
    producer of `Recommendation`; `Session.hint()` serves it on request; `web/app.js`
    renders it. Measured at 16 ms (48 samples) to 210 ms (1024) against a ~10 s turn.
-2. Overlay window (frameless, transparent, click-through — pywebview gives the first
-   three, click-through needs a Win32 `WS_EX_TRANSPARENT` call via ctypes).
+2. ~~Overlay window~~ — **done.** `pokajan/server/overlay.py`. **Everything about
+   pywebview here fails silently, and almost nothing behaves as documented** — five
+   separate traps, all written up in that module, all reported by `--check` so a
+   regression is visible:
+   transparency is a **pure-red colour key, not alpha**;
+   `focus=False` **does not survive WebView2 startup**;
+   `easy_drag` **never binds in 5.3.2** (`util.py` emits `'true'`, its JS tests
+   `'True'`);
+   a `js_api` object holding a **public** reference to the Window kills startup,
+   because pywebview walks it and calls `evaluate_js` too early;
+   and `create_window(width=)` **does not round-trip** with `window.width` while
+   `resize()` does — they differ by `devicePixelRatio`, so storing the wrong one grew
+   the window by the display scale on every launch.
+   **Verify against `--check` before believing any of it changed.**
 3. Per-game roster construction: `rules/pokajan_v1.yaml` pins one roster, but the real
    game redraws 14–19 characters and 4 groups every round. Everything downstream is
    roster-agnostic, so this is "build a `Rules` from the observed roster", not a

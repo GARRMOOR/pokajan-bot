@@ -266,11 +266,13 @@ def test_the_belief_is_fed_by_watching_not_by_being_asked(real_rules):
     assert list(belief.seen) == expected
 
 
-def test_asking_twice_for_the_same_position_does_not_shift_the_belief(real_rules):
-    """The Ask button can be pressed repeatedly, and evidence must not compound.
+def test_re_advising_the_same_position_does_not_shift_the_belief(real_rules):
+    """Evidence must not compound when the same view is folded in twice.
 
-    Folding the same view in twice would double-count it — the advice would drift
-    with the number of clicks, which is invisible and would read as noise.
+    `hint()` caches one answer per position, so the cache is cleared between calls
+    here on purpose - otherwise this would pass without the underlying path ever
+    running again, which is the vacuous-test trap this suite has fallen into before.
+    What is being checked is Belief.observe's idempotence, not the cache's.
     """
     session = Session(real_rules, human_seat=0, seed=11)
     advance(session, 12)
@@ -279,6 +281,7 @@ def test_asking_twice_for_the_same_position_does_not_shift_the_belief(real_rules
     session.hint()
     seen, passes = list(belief.seen), len(belief.pass_events)
     for _ in range(3):
+        session._hint_cache = None
         session.hint()
 
     assert list(belief.seen) == seen

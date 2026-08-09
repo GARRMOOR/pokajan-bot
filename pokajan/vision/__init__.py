@@ -105,14 +105,20 @@ depends on:
   makes the deck counter read one lower than a naive `100 - 28 - drawn` -- the
   reason the counter showed 71 rather than 72 in an earlier capture.
 
-* **One of the four "gates" around the centre oval lights yellow for the seat that
-  is to act.** Strongly indicated rather than confirmed: in the deck-0 frame the
-  left gate is lit *and* the left player holds a detached card, two independent
-  signals agreeing; in the deck-30 frame no gate is lit and no seat holds a
-  detached card. One capture where a known seat is clearly mid-decision would
-  settle it. Worth settling, because it is a far cheaper current-seat read than
-  inferring turn order from hand sizes, and the reader needs current seat to know
-  whether it is watching a discard or a claim window.
+* **One of the four "gates" around the centre oval marks the seat that is to act --
+  but it FLASHES rather than staying lit.** Confirmed. The flashing is the whole
+  difficulty: a single frame catching the dark phase looks exactly like a frame
+  where nobody is to act, which is what the two captures here disagreed about
+  before this was known. So the gate must be read as a disjunction over a short run
+  of frames -- lit in any of the last few means that seat is to act -- and never
+  from one grab. A reader that samples once per decision and trusts the answer will
+  report "no current seat" a large fraction of the time, and the failure looks like
+  a flaky detector rather than a misread signal.
+
+  Where a single frame *is* enough, prefer the detached card back above: it is
+  static for as long as the seat owes a discard. The two are complementary rather
+  than redundant, because the detached card cannot distinguish a claim window
+  (where the seat to act has not drawn) from an ordinary turn.
 
 * **Each seat's cards are drawn facing that seat, and the table has perspective.**
   The side seats' cards are not merely rotated 90 degrees, they are sheared into

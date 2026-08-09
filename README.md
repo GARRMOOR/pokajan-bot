@@ -9,10 +9,15 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M7, part one — the bot now explains itself, in the browser.** Full game logic, an
-AEC environment, the confirmed payout table, a web table you can sit down and play
-*with a hint panel*, a two-level belief, three agents, a determinized-search
-implementation, and an evaluation harness, with 142 tests passing.
+**M7 — the bot explains itself, in the browser and in an overlay.** Full game logic,
+an AEC environment, the confirmed payout table, a web table you can sit down and play
+*with a hint panel*, an overlay window pinned over the screen, a two-level belief,
+three agents, a determinized-search implementation, and an evaluation harness, with
+148 tests passing.
+
+What remains before this is useful against the real game is M8 alone: something that
+reads `PublicState` off the screen instead of out of the simulator. The overlay is
+already fed through a one-way advice socket, so that swap does not touch it.
 
 The agent ladder, all measured by duplicate dealing with 4-seat rotation:
 
@@ -93,8 +98,8 @@ M3  observation encoder, belief, heuristic agent, eval harness   <- done
 M4  PIMC agent                             <- built and measured; does not beat M3
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
-M7  hint mode + overlay                    <- hint panel done; overlay window next
-M8  screen reading
+M7  hint mode + overlay                    <- done
+M8  screen reading                         <- the only thing left before live use
 ```
 
 **M7 and M8 do not depend on M5 or M6**, and the roadmap's ordering is misleading
@@ -222,6 +227,33 @@ rule would be wrong in exactly the same confident way the in-game counter is.
 py -3.12 -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m pytest
+```
+
+The overlay is a second window, pinned over whatever is on screen:
+
+```powershell
+.\.venv\Scripts\python -m pokajan.server.app          # leave this running
+.\.venv\Scripts\python -m pokajan.server.overlay --place   # drag to move, corner to resize
+.\.venv\Scripts\python -m pokajan.server.overlay      # pinned, inert
+.\.venv\Scripts\python -m pokajan.server.overlay --check   # report what actually applied
+```
+
+Frameless, transparent, always on top, and — the part that matters — it takes no
+clicks and never takes focus. The real game is played online against real people, so
+an advisory panel has to be physically incapable of interfering with input. That is
+enforced twice over: `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` on the window, and a
+socket the overlay can only read from.
+
+Being inert is also why placement needs its own mode — a window that takes no clicks
+cannot be dragged — and why `--check` exists. Every mechanism here fails *silently*:
+window styles that did not apply, a drag region pywebview never bound to, a resize
+API that never reached the page. So it reports all of them rather than assuming:
+
+```
+pinned: clicks pass through, and it will not take focus.
+styles  0x080d0028 [layered, click-through, no-activate]
+size    520x190 css at 2x = 1040x380 physical
+handles 1 drag region(s), pinned so no grip
 ```
 
 Training extras are separate, because the two machines this runs on need different
