@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 199 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 203 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
@@ -131,14 +131,20 @@ Order that actually works, with the risk concentrated late:
    pays. It refuses rather than repairs, because a wrong roster produces advice that
    looks exactly like right advice. **Do the same when the reader lands** — every
    validation there exists because the failure is silent.
-4. Static recognition from one screenshot → roster, groups, hand, coins. **Cards are
-   done**: `vision/geometry.py` finds and splits rows, `vision/templates.py` names the
-   holomem. Measured by `scripts/check_vision.py` at 10/11 holomem and 11/11 colours on
-   a real frame, **0 wrong**, ~10 ms/card. What remains is coins and rank (digits), the
-   deck counter, the roster panel's head-and-shoulders portraits (a separate template
-   set from the cards), and locating the regions without hardcoding a resolution.
+4. Static recognition from one screenshot → roster, groups, hand, coins. **Cards and
+   layout are done.** `vision/layout.py` trims the letterbox and holds every region as a
+   fraction; `vision/geometry.py` finds and splits rows and reads frame colour;
+   `vision/templates.py` names the holomem. `scripts/check_vision.py` scores 11/12
+   holomem and 12/12 colours on a real frame, **0 wrong**, ~10 ms/card.
+   **Verify regions with `scripts/check_layout.py`, which draws them back onto a
+   frame** — it caught four misplaced boxes first time, one of which put the bonus card
+   inside the group panel. A fraction cannot be checked by reading it.
    Nothing here may guess: `identify` refuses on a thin *margin* rather than a low
-   score, because an unknown holomem still produces a plausible best match.
+   score, because an unknown holomem still produces a plausible best match, and an
+   incomplete catalogue is the normal state.
+   Still to do: digits (coins, ranks, deck counter), the group panel's
+   head-and-shoulders portraits — a separate template set from the cards — and the
+   newest-card-per-seat read described in step 5.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like

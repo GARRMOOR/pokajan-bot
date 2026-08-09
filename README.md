@@ -13,13 +13,14 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-199 tests passing.
+203 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
-themselves now read. Measured against a real frame by `scripts/check_vision.py`:
+themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
+every region taken from `vision/layout.py` rather than from pixel coordinates:
 
 ```
-holomem 10/11   colour 11/11   refused 1/11        ~10 ms/card
+holomem 11/12   colour 12/12   refused 1/12        ~10 ms/card
 ```
 
 Zero misidentified, which is the number that matters — the one refusal is a discard
@@ -42,6 +43,21 @@ An incomplete catalogue is the normal state rather than an error state — the r
 redrawn every round, so a game can always deal somebody whose card has never been
 captured. `core/roster.py` builds a game around whatever roster a round deals, 14 to 19
 holomem across four groups, verified by playing every shape.
+
+Regions are fractions of a **found** play area, not pixels: the game renders 16:9 and
+letterboxes it, so the bars get trimmed first and everything is relative to what is
+left. `scripts/check_layout.py` draws the regions back onto a frame, which is the only
+way to check a fraction means what it says — it caught four misplaced boxes on the first
+run, including one that had the bonus card sitting inside the group panel.
+
+The reader's remaining hard part is now scoped rather than guessed. **Do not try to
+segment an opponent's discard field**: the seats either side lay their discards out as
+sheared diagonal staircases, so the field's bounding box is far wider than one card and
+uniform slicing cuts across cards — aspects of 1.26 and 1.54 where a clean sideways card
+gives 1.395. Rectifying that also buys the wrong thing, because the old cards in a pile
+are already accumulated and the buried ones are unreadable anyway. What a continuous
+reader needs is the *newest* card in each field, once per turn, at the un-stacked end
+furthest from its seat.
 
 That module is mostly refusals, and deliberately so. A misread roster produces a
 `Rules` that loads happily and then misprices the whole game, because the belief is

@@ -72,6 +72,18 @@ depends on:
     is no clever frame to catch up from. Accumulate from the deal, and if tracking
     is lost, say so and stop advising rather than advise from a partial `table`.
 
+  Together those settle what the reader should actually aim at, which is not what it
+  looks like from a single screenshot. **Do not try to segment an opponent's discard
+  field.** Measured: the seats either side of you lay their discards out as diagonal
+  staircases, offset along the row as well as across it and sheared by the table's
+  perspective, so the field's bounding box is far wider than one card and uniform
+  slicing cuts across cards rather than between them -- aspects of 1.26 and 1.54 where
+  a clean sideways card gives 1.395. Rectifying that is real work, and it buys the
+  wrong thing: the old cards in the pile are already accumulated, and the buried ones
+  are unreadable regardless. What a continuous reader needs is **the single newest
+  card in each field, once per turn**, at the end furthest from its seat -- which is
+  the un-stacked, unambiguous end.
+
 * **Cards carry their group name** ("Gen1", "ID Gen3", "Myth") and colour is the
   card frame, not the artwork. So identification decomposes cleanly: character from
   an art template, colour from a flat frame sample, group as a free cross-check.

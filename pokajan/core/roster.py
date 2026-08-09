@@ -135,6 +135,13 @@ def _validate(base: Rules, roster: ObservedRoster) -> None:
     if duplicates:
         # A character in two groups would make one card complete two different group
         # hands, which the payout table has no answer for.
+        #
+        # Some holomem really do hold two memberships -- Fubuki is in both Gen 1 and
+        # GAMERS, and the card art carries a per-group variant for her. The player's
+        # judgement is that the game never draws both of her groups as goals in one
+        # round, so this stays a refusal rather than becoming a modelled case. If a
+        # group panel ever shows the same holomem in two rows, that is a real rules
+        # discovery and this is the assumption it overturns.
         raise RosterError(f"characters appear in more than one group: {duplicates}")
 
     if not MIN_CHARACTERS <= len(ids) <= MAX_CHARACTERS:

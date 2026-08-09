@@ -258,3 +258,78 @@ def test_coverage_against_a_roster_is_reported_before_a_round_starts(real_rules)
     assert set(missing) == set(roster.characters) - set(known)
     assert not TemplateSet({c: [prepare(card(i))] for i, c in
                             enumerate(roster.characters)}).missing_from(roster)
+
+
+# ------------------------------------------------------------------ layout ---
+#
+# The regions themselves are checked by eye with scripts/check_layout.py, because a
+# fraction is impossible to verify by reading. What is guarded here is the frame
+# handling underneath them: finding the play area, and refusing when it is not there.
+
+def letterboxed(width: int = 640, height: int = 400, bars: int = 20) -> np.ndarray:
+    """A frame with black bars top and bottom, as the game is captured."""
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[bars:height - bars, :] = FELT
+    return frame
+
+
+def test_the_play_area_is_found_rather_than_assumed():
+    """Every capture so far is 2880x1800 with 90-pixel bars, leaving exactly 16:9.
+
+    Absolute pixel coordinates would be a promise about one window size, broken by a
+    different monitor or a resized window.
+    """
+    from pokajan.vision.layout import find_play_area
+
+    height, bars = 400, 20
+    area = find_play_area(letterboxed(height=height, bars=bars))
+
+    assert area is not None
+    assert (area.x, area.y) == (0, bars)
+    assert area.height == height - 2 * bars
+    assert area.aspect == pytest.approx(16 / 9, abs=0.05)
+
+
+def test_a_frame_that_is_not_the_game_is_refused():
+    """Refusing here is far cheaper than every region afterwards being offset."""
+    from pokajan.vision.layout import find_play_area
+
+    assert find_play_area(np.zeros((400, 640, 3), dtype=np.uint8)) is None, "all black"
+    assert find_play_area(np.full((400, 400, 3), 90, dtype=np.uint8)) is None, "square"
+    assert find_play_area(np.zeros((4, 4, 3), dtype=np.uint8)) is None, "tiny"
+
+
+def test_regions_scale_with_the_play_area():
+    """The same fractions must land on the same content at any capture size."""
+    from pokajan.vision.layout import HAND, find_play_area
+
+    small = find_play_area(letterboxed(640, 400, 20))
+    large = find_play_area(letterboxed(1920, 1200, 60))
+
+    for box, area in ((HAND, small), (HAND, large)):
+        left, top, right, bottom = box.pixels(area)
+        assert (left / area.width) == pytest.approx(box.left, abs=0.002)
+        assert ((top - area.y) / area.height) == pytest.approx(box.top, abs=0.002)
+        assert right > left and bottom > top
+
+
+def test_a_vertical_row_is_split_and_turned_upright():
+    """The seats either side of you run their discards down the screen.
+
+    Without this the same code returns one enormous card with an aspect around 0.42,
+    which nothing downstream recognises as wrong -- it is simply a crop that never
+    matches. Their real fields are also sheared, which is why the reader targets the
+    newest card rather than the whole field; this covers the axis-aligned part.
+    """
+    from pokajan.vision.geometry import find_row
+
+    cards = [card(i, "blue") for i in range(4)]
+    sideways = np.rot90(row_of(cards), 1)          # a column, cards on their side
+
+    row = find_row(sideways, vertical=True, rotate=-90)
+
+    assert row is not None
+    assert len(row.cards) == 4
+    for one in row.cards:
+        upright = one.shape[1] / one.shape[0]
+        assert upright == pytest.approx(CARD_ASPECT, abs=0.05), "not turned upright"

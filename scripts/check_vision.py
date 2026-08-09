@@ -24,27 +24,39 @@ sys.path.insert(0, str(REPO))
 import numpy as np
 from PIL import Image
 
+from pokajan.vision import layout
 from pokajan.vision.geometry import classify_colour, find_row, frame_colour
 from pokajan.vision.templates import TemplateSet
 
 CARDS = REPO / "data" / "cards"
 TABLES = REPO / "data" / "tables"
 
-# (screenshot, region, expected [(holomem, colour), ...]) -- read by eye.
-# Regions are the generous bounding boxes of a row; find_row locates the cards inside.
+# (screenshot, layout box, expected [(holomem, colour), ...]) -- read by eye.
+#
+# Regions come from vision/layout.py rather than being pixel coordinates here, so this
+# also exercises the letterbox trim and the fractions. Only the axis-aligned rows are
+# listed: the seats either side lay their discards out as sheared diagonal staircases,
+# and the reader's answer to that is to target the newest card rather than segment the
+# field -- see pokajan/vision/__init__.py.
 CASES = [
     (
-        "20260809073329_1.jpg", (470, 1310, 2100, 1660),
+        "20260809073329_1.jpg", layout.HAND,
         [("shirakami_fubuki", "pink"), ("ookami_mio", "blue"), ("ookami_mio", "pink"),
          ("amane_kanata", "blue"), ("tokoyami_towa", "pink"),
          ("shishiro_botan", "pink"), ("mori_calliope", "blue")],
     ),
     (
-        # The same seat's discards two minutes earlier. The leftmost card sits on a
-        # stack of buried ones, so this also checks that a stacked pile still reads.
-        "20260809073329_1.jpg", (930, 1030, 1620, 1280),
+        # The same seat's own discards. The leftmost card sits on a stack of buried
+        # ones, so this also checks what a stacked pile does to a read.
+        "20260809073329_1.jpg", layout.DISCARDS["bottom"],
         [("shishiro_botan", "orange"), ("tokoyami_towa", "blue"),
          ("amane_kanata", "blue"), ("gawr_gura", "pink")],
+    ),
+    (
+        # The bonus holomem is drawn as a full card, so it reads with the ordinary
+        # card templates and never has to be inferred from a payout.
+        "20260809073329_1.jpg", layout.BONUS_CARD,
+        [("gawr_gura", None)],
     ),
 ]
 
@@ -65,7 +77,13 @@ def main() -> int:
             continue
 
         with Image.open(path) as image:
-            region = np.asarray(image.convert("RGB").crop(box))
+            frame = np.asarray(image.convert("RGB"))
+
+        area = layout.find_play_area(frame)
+        if area is None:
+            print(f"{filename}: could not find the play area")
+            continue
+        region = area.crop(frame, box)
 
         row = find_row(region)
         found = 0 if row is None else len(row.cards)
@@ -80,14 +98,16 @@ def main() -> int:
             colour, distance = classify_colour(frame_colour(card))
 
             who_ok = match.character == want_who
-            colour_ok = colour == want_colour
+            # The bonus card is drawn without a coloured frame, so `None` expected
+            # there means "do not ask", not "should read as nothing".
+            colour_ok = want_colour is None or colour == want_colour
             named += who_ok
             coloured += colour_ok
             refused += not match.confident
 
             flag = "ok  " if who_ok and colour_ok else "BAD "
             got = match.character or f"refused ({match.reason})"
-            print(f"  {flag} {want_who:<18} {want_colour:<7} -> {got:<20}"
+            print(f"  {flag} {want_who:<18} {str(want_colour):<7} -> {got:<20}"
                   f" {colour or '?':<7} score {match.score:.2f}"
                   f" margin {match.margin:+.2f} colour dist {distance:.0f}")
         print()

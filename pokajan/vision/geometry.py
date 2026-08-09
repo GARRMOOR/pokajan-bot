@@ -68,14 +68,39 @@ def is_felt(pixels: np.ndarray) -> np.ndarray:
     return (g > r + FELT_MARGIN) & (g > b + FELT_MARGIN)
 
 
-def find_row(region: np.ndarray, *, expected: int | None = None) -> CardRow | None:
+def find_row(
+    region: np.ndarray,
+    *,
+    expected: int | None = None,
+    vertical: bool = False,
+    rotate: int = 0,
+) -> CardRow | None:
     """Split a region containing one row of cards into individual cards.
 
     `expected` cross-checks the arithmetic when the count is known from elsewhere --
     a hand size, say. It is a check and not an override: disagreeing means the row
     was not what the caller thought, and inventing the requested number of cards from
     a misread region is how a reader ends up confidently wrong.
+
+    `vertical` for the seats either side of you, whose discards run down the screen
+    rather than across it. Without it the same code returns one enormous "card" with an
+    aspect of 0.42, which is not obviously wrong to anything downstream -- it is just a
+    crop that never matches anything. `rotate` then turns the cards upright, in
+    multiples of 90 degrees anticlockwise, so the template matcher sees what it expects.
     """
+    if vertical:
+        # Transposing costs nothing and keeps one implementation of the arithmetic.
+        # A vertical column of cards is a horizontal row of cards, sideways.
+        found = find_row(region.swapaxes(0, 1), expected=expected, rotate=0)
+        if found is None:
+            return None
+        return CardRow(
+            cards=[_rotate(card.swapaxes(0, 1), rotate) for card in found.cards],
+            card_width=found.card_height,
+            card_height=found.card_width,
+            origin=(found.origin[1], found.origin[0]),
+        )
+
     solid = ~is_felt(region)
     by_row, by_col = solid.mean(axis=1), solid.mean(axis=0)
     if by_row.size == 0 or by_col.size == 0 or by_row.max() == 0 or by_col.max() == 0:
@@ -98,7 +123,8 @@ def find_row(region: np.ndarray, *, expected: int | None = None) -> CardRow | No
 
     step = (x1 - x0) / count
     cards = [
-        region[y0:y1, int(round(x0 + i * step)):int(round(x0 + (i + 1) * step))]
+        _rotate(region[y0:y1, int(round(x0 + i * step)):int(round(x0 + (i + 1) * step))],
+                rotate)
         for i in range(count)
     ]
     return CardRow(
@@ -107,6 +133,12 @@ def find_row(region: np.ndarray, *, expected: int | None = None) -> CardRow | No
         card_height=height,
         origin=(x0, y0),
     )
+
+
+def _rotate(card: np.ndarray, degrees: int) -> np.ndarray:
+    """Turn a card upright. Multiples of 90 anticlockwise; anything else is ignored."""
+    turns = (degrees // 90) % 4
+    return np.rot90(card, turns) if turns else card
 
 
 def frame_colour(card: np.ndarray, *, quantile: float = 0.80) -> tuple[float, float, float]:
