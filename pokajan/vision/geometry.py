@@ -1,0 +1,165 @@
+"""Finding cards on the screen, and reading the colour off their frames.
+
+Everything here is derived from the image rather than from a resolution, because a
+table of pixel coordinates is a promise about a window size that will be broken by a
+different monitor, a resized window or a UI update. The one number that *is* fixed is
+the card's shape: every card the game draws has the same aspect ratio, so the row's
+height calibrates its own card width and the count falls out of arithmetic.
+
+That matters more than it sounds. The obvious way to split a row of cards is to look
+for the table felt between them, and it fails: the gutters are only about a tenth
+felt, and the glow the game puts around a highlighted pair erases one entirely.
+Measured on a real frame, gutter detection found one card where there were seven.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+# Mean of the supplied card art, which is all the same shape to within a few pixels.
+CARD_ASPECT = 195 / 272
+
+# The felt. Green-dominant and not bright, which no card frame is.
+FELT_MARGIN = 30
+
+# How much of a row or column must be non-felt to count as part of a card, as a
+# fraction of the *most* covered row or column rather than of the region.
+#
+# Relative because an absolute fraction silently depends on how tightly the caller
+# cropped. A discard field of four cards inside a region wide enough to hold six never
+# covers 60% of it at the rounded corners, so an absolute 0.6 clipped the band top and
+# bottom, shrank the estimated card height by 9%, and widened every slice enough to
+# pull the next card into it. Two of four cards then fell under the match threshold.
+SOLID_FRACTION = 0.5
+
+# Frame colours, measured from real frames rather than guessed -- the mean of the most
+# saturated fifth of each card's border ring, across several cards per colour:
+#
+#   blue    (62,130,244) (64,127,229) (76,132,229) (60,130,245)
+#   orange  (235,116,49) (208,90,56)
+#   pink    (247,70,175) (243,68,172) (239,74,164) (218,56,140)
+#
+# Recalibrate with scripts/check_vision.py if the game ever restyles its cards. The
+# colour *names* come from rules/pokajan_v1.yaml; only these reference values live
+# here, because they describe the artwork rather than the game.
+FRAME_REFERENCES = {
+    "blue": (64, 128, 233),
+    "orange": (222, 103, 52),
+    "pink": (240, 67, 170),
+}
+
+
+@dataclass(frozen=True)
+class CardRow:
+    """A row of cards found in one region of a frame."""
+
+    cards: list[np.ndarray]      # each an (h, w, 3) uint8 crop
+    card_width: int
+    card_height: int
+    origin: tuple[int, int]      # (x, y) of the row within the region searched
+
+
+def is_felt(pixels: np.ndarray) -> np.ndarray:
+    """Boolean mask of table-felt pixels."""
+    a = pixels.astype(np.int16)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    return (g > r + FELT_MARGIN) & (g > b + FELT_MARGIN)
+
+
+def find_row(region: np.ndarray, *, expected: int | None = None) -> CardRow | None:
+    """Split a region containing one row of cards into individual cards.
+
+    `expected` cross-checks the arithmetic when the count is known from elsewhere --
+    a hand size, say. It is a check and not an override: disagreeing means the row
+    was not what the caller thought, and inventing the requested number of cards from
+    a misread region is how a reader ends up confidently wrong.
+    """
+    solid = ~is_felt(region)
+    by_row, by_col = solid.mean(axis=1), solid.mean(axis=0)
+    if by_row.size == 0 or by_col.size == 0 or by_row.max() == 0 or by_col.max() == 0:
+        return None
+    rows = np.where(by_row > SOLID_FRACTION * by_row.max())[0]
+    cols = np.where(by_col > SOLID_FRACTION * by_col.max())[0]
+    if rows.size == 0 or cols.size == 0:
+        return None
+
+    y0, y1 = int(rows[0]), int(rows[-1]) + 1
+    x0, x1 = int(cols[0]), int(cols[-1]) + 1
+    height = y1 - y0
+    width = height * CARD_ASPECT
+    if width < 1:
+        return None
+
+    count = max(1, round((x1 - x0) / width))
+    if expected is not None and count != expected:
+        return None
+
+    step = (x1 - x0) / count
+    cards = [
+        region[y0:y1, int(round(x0 + i * step)):int(round(x0 + (i + 1) * step))]
+        for i in range(count)
+    ]
+    return CardRow(
+        cards=cards,
+        card_width=int(round(step)),
+        card_height=height,
+        origin=(x0, y0),
+    )
+
+
+def frame_colour(card: np.ndarray, *, quantile: float = 0.80) -> tuple[float, float, float]:
+    """The card's frame colour, as RGB.
+
+    Sampled from the whole border ring and reduced to the most saturated fifth of it,
+    which is the part that is actually frame. Sampling a single edge strip does not
+    work: the artwork overflows the frame, and a card whose holomem has white hair
+    reads as near-white on the left edge -- measured at (225,223,231) on a pink card,
+    which classifies as nothing at all. The frame is strongly saturated and the
+    overlapping artwork usually is not, so a saturation quantile separates them
+    without needing to know where the overflow is.
+    """
+    a = card.astype(np.float32)
+    h, w = a.shape[:2]
+    # Skip the outermost pixels: antialiasing against the felt, plus the glow the
+    # game draws around a highlighted card.
+    inset_y, inset_x = max(1, int(h * 0.03)), max(1, int(w * 0.03))
+    band_y, band_x = max(1, int(h * 0.08)), max(1, int(w * 0.10))
+
+    ring = np.concatenate([
+        a[inset_y:inset_y + band_y, inset_x:w - inset_x].reshape(-1, 3),
+        a[h - inset_y - band_y:h - inset_y, inset_x:w - inset_x].reshape(-1, 3),
+        a[inset_y:h - inset_y, inset_x:inset_x + band_x].reshape(-1, 3),
+        a[inset_y:h - inset_y, w - inset_x - band_x:w - inset_x].reshape(-1, 3),
+    ])
+    if ring.size == 0:
+        return (0.0, 0.0, 0.0)
+
+    high, low = ring.max(axis=1), ring.min(axis=1)
+    saturation = np.where(high > 0, (high - low) / np.maximum(high, 1.0), 0.0)
+    keep = ring[saturation >= np.quantile(saturation, quantile)]
+    return tuple(float(v) for v in keep.mean(axis=0))
+
+
+def classify_colour(
+    rgb: tuple[float, float, float],
+    references: dict[str, tuple[int, int, int]] | None = None,
+    *,
+    max_distance: float = 120.0,
+) -> tuple[str | None, float]:
+    """Nearest reference colour, and how far away it was.
+
+    Returns `(None, distance)` when nothing is close enough. The frame colours are
+    far apart -- the nearest pair is about 190 apart in RGB -- so a sample more than
+    `max_distance` from all three is a sign the crop is not a card at all rather than
+    a card of an unexpected colour.
+    """
+    refs = references or FRAME_REFERENCES
+    query = np.asarray(rgb, dtype=np.float32)
+    ranked = sorted(
+        (float(np.linalg.norm(query - np.asarray(ref, dtype=np.float32))), name)
+        for name, ref in refs.items()
+    )
+    distance, name = ranked[0]
+    return (name if distance <= max_distance else None), distance

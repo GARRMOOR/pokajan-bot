@@ -7,12 +7,15 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 148 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 199 tests, ~2 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
-- **numpy and torch are training-only** (`requirements-train.txt`) and *not
-  installed*. Nothing outside `pokajan/train/` may import them — the belief, the
-  observation encoder and every agent run on plain lists on purpose.
+- **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
+  `requirements-train.txt`, the second via `requirements-vision.txt`. The belief, the
+  observation encoder and every agent run on plain lists on purpose: numpy's per-call
+  overhead dominates on arrays of fifty-odd elements, and that is measured, not
+  aesthetic. Vision is the opposite case, where the array operation *is* the work.
+  torch stays training-only and is not installed.
 - Two machines: this laptop is CPU-only (AMD 780M). The desktop has an **RX 7800 XT
   — AMD, so no CUDA.** On Windows that means DirectML or ZLUDA, not the CUDA path
   the plan's "hours instead of days" estimate assumed. Worth pricing before M5
@@ -123,13 +126,19 @@ Order that actually works, with the risk concentrated late:
    `resize()` does — they differ by `devicePixelRatio`, so storing the wrong one grew
    the window by the display scale on every launch.
    **Verify against `--check` before believing any of it changed.**
-3. Per-game roster construction: `rules/pokajan_v1.yaml` pins one roster, but the real
-   game redraws 14–19 characters and 4 groups every round. Everything downstream is
-   roster-agnostic, so this is "build a `Rules` from the observed roster", not a
-   refactor — but nothing does it yet and M8 cannot start without it. Cheaper than it
-   looks: the roster panel stays on the table all round, so there is no animation to
-   catch and no state to reconstruct.
-4. Static recognition from one screenshot → roster, groups, hand, coins.
+3. ~~Per-game roster construction~~ — **done.** `core/roster.py`: `rules_for_roster`
+   edits three keys and re-parses, so a misread roster can never alter what a hand
+   pays. It refuses rather than repairs, because a wrong roster produces advice that
+   looks exactly like right advice. **Do the same when the reader lands** — every
+   validation there exists because the failure is silent.
+4. Static recognition from one screenshot → roster, groups, hand, coins. **Cards are
+   done**: `vision/geometry.py` finds and splits rows, `vision/templates.py` names the
+   holomem. Measured by `scripts/check_vision.py` at 10/11 holomem and 11/11 colours on
+   a real frame, **0 wrong**, ~10 ms/card. What remains is coins and rank (digits), the
+   deck counter, the roster panel's head-and-shoulders portraits (a separate template
+   set from the cards), and locating the regions without hardcoding a resolution.
+   Nothing here may guess: `identify` refuses on a thin *margin* rather than a low
+   score, because an unknown holomem still produces a plausible best match.
 5. Event tracking across a live round, with a "lost track — no advice" guard. **This
    is where the real risk is**: `table` and `scored` must be accumulated by watching
    continuously, so one missed claim silently corrupts the belief, which looks like
@@ -142,6 +151,19 @@ The browser panel already lives under that same constraint on purpose:
 hint is asked about, because an unclaimed discard is visible only as a difference
 between consecutive views. Moving that into `hint()` for speed would leave the
 belief inferring from gaps and nothing would look broken — there is a test.
+
+## Do this before M5 spends any compute
+
+**The observation vector's length depends on the roster** — 845 dims at 14 holomem,
+1130 at 19 — because every block in `envs/obs.py` is sized from `n_slots`. The engine,
+belief and heuristic do not care, which is why the overlay works without training
+anything. A network cares completely: one trained on a 17-holomem game cannot be fed a
+14-holomem observation, and the real game redraws its roster every round.
+
+Pad to the maximum roster with a validity mask. ~10% wasted width, and checkpoints
+become portable across rosters instead of worthless. **It is free right now and never
+again** — changing the layout invalidates every trained checkpoint, and there are
+currently none.
 
 ## Test strategy
 

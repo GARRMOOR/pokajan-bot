@@ -52,7 +52,31 @@ class Block:
 
 @dataclass(frozen=True)
 class ObsSpec:
-    """Fixed layout for one rules config."""
+    """Fixed layout for one rules config.
+
+    **Fixed for one config, and that is a problem waiting at M5.** Every block below
+    is sized from `n_slots` or `n_chars`, so the roster the real game deals decides
+    the vector's length:
+
+        14 holomem -> 42 slots ->  845 dims
+        16 holomem -> 48 slots ->  959 dims
+        17 holomem -> 51 slots -> 1016 dims
+        19 holomem -> 57 slots -> 1130 dims
+
+    The engine, the belief and the heuristic do not care -- `core/roster.py` builds a
+    `Rules` per game and they all take their dimensions from it, which is what makes
+    the overlay possible without training anything. A *network* cares completely: one
+    trained on a 17-holomem game cannot be fed a 14-holomem observation at all, and
+    the real game redraws its roster every round.
+
+    The fix is to pad to the maximum roster and carry a validity mask, so every game
+    presents the same vector with unused slots zeroed. Roughly 10% wasted width, and
+    it makes checkpoints portable across rosters instead of worthless.
+
+    It is not done here because it costs nothing today and everything later: changing
+    this layout invalidates every trained checkpoint, and there are currently none. Do
+    it before M5 spends compute, not after.
+    """
 
     rules: Rules
     blocks: tuple[Block, ...]

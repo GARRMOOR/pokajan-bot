@@ -13,11 +13,42 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-148 tests passing.
+199 tests passing.
 
-What remains before this is useful against the real game is M8 alone: something that
-reads `PublicState` off the screen instead of out of the simulator. The overlay is
-already fed through a one-way advice socket, so that swap does not touch it.
+What remains before this is useful against the real game is recognition, and the cards
+themselves now read. Measured against a real frame by `scripts/check_vision.py`:
+
+```
+holomem 10/11   colour 11/11   refused 1/11        ~10 ms/card
+```
+
+Zero misidentified, which is the number that matters — the one refusal is a discard
+buried under a stack whose crop is genuinely cut. Three findings made this work, and
+each replaced something that seemed more obvious:
+
+- **Split rows by the card's aspect ratio, not by the gaps between cards.** Gutters are
+  only about a tenth table-felt, and the glow around a highlighted pair erases one
+  entirely; gutter detection found one card where there were seven. Card shape is fixed,
+  so a row's height calibrates its own card width and the count is arithmetic.
+- **Read colour from the whole frame ring, reduced to its most saturated fifth.** The
+  artwork overflows the frame, so a single edge strip on a white-haired holomem samples
+  (225,223,231) — which is not blue, orange or pink.
+- **Refuse on a thin margin, not on a low score.** An unknown holomem still produces a
+  plausible best match, because the art is all portraits against pale backgrounds. What
+  a wrong answer cannot do is stand apart from the field: correct matches beat the
+  runner-up by 0.34 or more, while the also-rans sat within hundredths of each other.
+
+An incomplete catalogue is the normal state rather than an error state — the roster is
+redrawn every round, so a game can always deal somebody whose card has never been
+captured. `core/roster.py` builds a game around whatever roster a round deals, 14 to 19
+holomem across four groups, verified by playing every shape.
+
+That module is mostly refusals, and deliberately so. A misread roster produces a
+`Rules` that loads happily and then misprices the whole game, because the belief is
+inferred against a slot space that does not match reality — and advice from a wrong
+roster looks exactly like advice from a right one. So it raises rather than repairing,
+including on the constraint nobody thinks of: each (holomem, colour) slot holds at
+most three cards, so a 100-card deck needs at least twelve holomem to exist at all.
 
 The agent ladder, all measured by duplicate dealing with 4-seat rotation:
 
