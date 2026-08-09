@@ -25,12 +25,40 @@ from pokajan.vision.geometry import find_row
 COLOURS = {
     "deck": (255, 220, 0),
     "groups": (0, 220, 255),
+    "badges": (0, 140, 255),
     "bonus": (255, 120, 255),
     "hand": (120, 255, 120),
     "discards": (255, 140, 0),
     "coins": (255, 70, 70),
     "ranks": (170, 130, 255),
 }
+
+
+def _report_roster(frame: np.ndarray, area: layout.PlayArea) -> None:
+    """What the panel and its badges say the roster is -- or why they refuse.
+
+    Printed here because it is the one read that can be checked against the screenshot at
+    a glance, and because a refusal names which of the three agreements failed.
+    """
+    from pokajan.vision.group_labels import LabelReader
+    from pokajan.vision.roster_panel import (
+        GroupBook, PanelError, count_members, read_table_roster,
+    )
+
+    book, reader = GroupBook.load(), LabelReader.load()
+    print("\nroster:")
+    print(f"  member counts   {count_members(area.crop(frame, layout.GROUP_PANEL))}")
+    for row, badge in enumerate(reader.read(area.crop(frame, layout.GROUP_LABELS))):
+        detail = (f"{badge.badge!r} score {badge.score:.2f} margin {badge.margin:.2f}"
+                  if badge.confident else f"refused -- {badge.reason}")
+        print(f"  badge row {row + 1}     {detail}")
+    try:
+        roster = read_table_roster(frame, area, book=book, reader=reader)
+    except PanelError as error:
+        print(f"  REFUSED: {error}")
+        return
+    print(f"  {len(roster.characters)} characters: "
+          + ", ".join(f"{g.name}({len(g.members)})" for g in roster.groups))
 
 
 def main(argv: list[str]) -> int:
@@ -59,6 +87,12 @@ def main(argv: list[str]) -> int:
         ("bonus", "bonus", layout.BONUS_CARD),
         ("hand", "hand", layout.HAND),
     ]
+    # Each badge band separately rather than the whole label box. Both edges of that box
+    # are tight against something -- the panel's placeholder border on the left, the
+    # table's painted laurel on the right -- and the bands have to clear the descenders
+    # on "My" and the ID branches' subscript. None of that is checkable from one outline.
+    for row in range(layout.GROUP_ROWS):
+        regions.append((f"badge {row}", "badges", layout.group_label_row(row)))
     for seat in layout.SEAT_ORDER:
         regions.append((f"disc {seat}", "discards", layout.DISCARDS[seat]))
         regions.append((f"coins {seat}", "coins", layout.COINS[seat]))
@@ -79,6 +113,8 @@ def main(argv: list[str]) -> int:
             f"{len(row.cards)} cards, {row.card_width}x{row.card_height}, "
             f"aspect {row.card_width / row.card_height:.3f}")
         print(f"  {label:<18} {found}")
+
+    _report_roster(frame, area)
 
     out = path.with_name(path.stem + "_layout.png")
     canvas.save(out)

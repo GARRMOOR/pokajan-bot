@@ -7,9 +7,20 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 238 tests, ~2 min.
+- `.\.venv\Scripts\python -m pytest` — 259 tests, ~1 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
+- `.\.venv\Scripts\python -m pokajan.server.overlay [--place|--check]` — the overlay.
+- **Vision is checked by scripts, not tests** (see Test strategy):
+  `scripts\check_vision.py` scores card and colour reading on real frames;
+  `scripts\check_layout.py` draws every region back onto a frame — the only way to
+  verify a fraction, and it now also reports the roster each frame reads;
+  `scripts\harvest_digits.py` re-cuts the digit exemplars and
+  `scripts\harvest_group_labels.py` the group badges. **Both harvesters must be re-run
+  and their reads checked back against their own transcriptions when a case is added** —
+  the glyph-count check only catches a case with the wrong *number* of digits, and a case
+  transcribed as 1040 when the screen said 2270 quietly fed a `2` into the `1` exemplar
+  for weeks.
 - **numpy belongs to `pokajan/train/` and `pokajan/vision/` only** — the first via
   `requirements-train.txt`, the second via `requirements-vision.txt`. The belief, the
   observation encoder and every agent run on plain lists on purpose: numpy's per-call
@@ -36,6 +47,12 @@ wrong and not obvious from reading the code.
    live online games and carry real players' usernames. `.gitignore` enforces it.
    Transcribe observations into `data/captures/*.yaml` instead — that is the durable
    artifact and it holds no personal data.
+   The **inverse also holds**: derived *text* under `data/captures/` is committed on
+   purpose — `digits.yaml` (glyph shapes from the game's typeface),
+   `hololive_groups.yaml` (public agency membership), `payouts_observed.yaml` and
+   `rounds_observed.yaml`. They carry no personal data and they are what lets the
+   reader work on a machine that has no screenshots. Keep them plain text so a bad
+   entry shows up in a diff.
 
 ## Architecture that is expensive to reverse
 
@@ -186,6 +203,30 @@ hint is asked about, because an unclaimed discard is visible only as a differenc
 between consecutive views. Moving that into `hint()` for speed would leave the
 belief inferring from gaps and nothing would look broken — there is a test.
 
+## Working with the user
+
+They are the only source of game data, and they respond fast to **specific** requests —
+name the exact file, value or screen. Two open asks, neither blocking:
+
+- **frames showing the seven group badges never yet captured** — `0` (Gen0), `3` (Gen3),
+  `2ID` (ID Gen2), `X` (holoX), `Pr` (Promise), `Ad` (Advent), `Re` (ReGLOSS). A round
+  dealing one of those cannot have its roster read at all. `scripts\harvest_group_labels.py`
+  prints the current list every run.
+- **more card art**, currently 46 of 62 holomem. Coverage decides how often the reader
+  names a card rather than refusing.
+
+Closed: **the digit 5**, which appears in no number on the table — every payout is a
+multiple of ten, so no coin total ends in one. It was cut from the Gen5 group *badge*
+instead, the badges being drawn in the same typeface (measured: coin-harvested exemplars
+match the Gen1–Gen4 badges at 0.86–0.97). Still worth confirming from a real coin total if
+one ever shows a 5, since it is the one exemplar reasoned across contexts.
+
+They fix misnamed art at source when told, and have offered to let us rename files
+directly — either is fine, but **say which**. Do not fuzzy-match a filename to avoid
+asking; that is how `usada_pekore` would have become the wrong holomem.
+
+They run every `git commit` themselves. Hand over the message.
+
 ## Do this before M5 spends any compute
 
 **The observation vector's length depends on the roster** — 845 dims at 14 holomem,
@@ -201,6 +242,13 @@ currently none.
 
 ## Test strategy
 
+- **Vision tests are synthetic, always.** The card art and the captures both live under
+  `data/` and are gitignored, so no test may depend on them — a fresh clone must pass.
+  Generate images in the test. Accuracy against the *real* thing is measured by the
+  scripts above, run on the machine that holds the data, and the numbers get written into
+  the README. This split is not a compromise: the synthetic tests caught a real bug the
+  captures were hiding, where a brightness range computed over the wrong subset made a
+  region read as blank whenever antialiasing did not save it.
 - **`tests/invariants/`** run against *randomly generated* rosters (14–19 characters,
   any group split, any payout scale) and assert only what must hold under any config.
   These keep their value when numbers get corrected.

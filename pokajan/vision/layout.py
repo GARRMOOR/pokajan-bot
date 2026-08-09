@@ -118,9 +118,39 @@ DECK_COUNTER = Box(0.350, 0.470, 0.400, 0.515)
 # land on green felt -- which then reads as four filled rows where three have a
 # placeholder, so every group-size check passes for the wrong reason.
 GROUP_PANEL = Box(0.443, 0.328, 0.520, 0.497)
-# The row labels: "Ga", "4", "5", "My". Reading these four is what determines the roster,
-# since the game draws real hololive branches -- see vision/roster_panel.py.
-GROUP_LABELS = Box(0.527, 0.328, 0.560, 0.497)
+# The row badges: "Ga", "4", "5", "My". Reading these four is what determines the roster,
+# since the game draws real hololive branches -- see vision/group_labels.py.
+#
+# Wider and taller than the panel beside it, and both directions are load-bearing. The ID
+# branches print their generation number with a small "ID" beneath and to the right of it,
+# and Myth's "y" descends: an earlier box ending at 0.560/0.497 clipped both, so "1ID" came
+# back as a bare "1" -- which is Gen1, a real group with different members. A badge that
+# loses its subscript does not refuse, it answers wrongly.
+#
+# The left edge is equally deliberate. GROUP_PANEL ends at 0.520 and the placeholder cells'
+# rounded border runs to about 0.522, so a box starting at 0.520 picks up a full-height grey
+# stripe down its left side -- which is a second "glyph" as far as any segmenter is
+# concerned, and it moves depending on what the panel is showing. 0.524 clears it and still
+# leaves room before the widest badge starts at 0.526.
+#
+# The right edge stops at 0.566 because the table's painted laurel decoration begins around
+# 0.570 and would read as ink.
+GROUP_LABELS = Box(0.524, 0.325, 0.566, 0.505)
+GROUP_ROWS = 4
+
+
+def group_label_row(index: int) -> Box:
+    """The badge band for one panel row, counting from the top.
+
+    The panel is a fixed grid, so the bands are arithmetic rather than found. Exposed
+    because a single row is occasionally wanted on its own -- `scripts/harvest_digits.py`
+    cuts the digit 5 out of a Gen5 badge, there being no coin total that ends in one.
+    """
+    if not 0 <= index < GROUP_ROWS:
+        raise IndexError(f"panel has {GROUP_ROWS} rows, asked for {index}")
+    span = (GROUP_LABELS.bottom - GROUP_LABELS.top) / GROUP_ROWS
+    return Box(GROUP_LABELS.left, GROUP_LABELS.top + index * span,
+               GROUP_LABELS.right, GROUP_LABELS.top + (index + 1) * span)
 BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 
 # Card rows. Deliberately loose: a discard field is one card wide at the deal and five

@@ -144,6 +144,48 @@ depends on:
   four-way classification and an arithmetic check, and the check is what catches a
   misread label rather than trusting it.
 
+  **This is built and measured.** Every capture whose panel is not covered reads all
+  four badges at 0.94 to 0.98 with margins of 0.20 to 0.45, and produces the whole
+  roster: three different rounds, 15, 16 and 17 characters, and the 17-character one
+  matches the hand transcription in `data/captures/rounds_observed.yaml` exactly. No
+  frame produced a wrong answer; the covered ones refuse. See vision/group_labels.py.
+
+  Three things about the badges are not guessable from a single glance and each cost
+  something to learn:
+
+  - **A badge is not a digit, even when it looks like one.** Six groups print a bare
+    numeral, but GAMERS prints "Ga", Myth "My", and the ID branches print their
+    generation number with a small "ID" beneath: "1ID", "2ID", "3ID". Feeding a badge
+    to the digit reader is not merely unhelpful, it is *confidently wrong* -- "Ga"
+    reads as a 0 at 0.74 with its runner-up 0.25 behind, because a digit alphabet has
+    nothing for a G to compete against and so nothing to refuse on.
+
+  - **"1ID" and "1" are different groups**, and everything separating them is in the
+    subscript. The first label box clipped it, so ID Gen1 read as a confident Gen1 --
+    a real group, four different members, no complaint from anywhere. That is the
+    whole failure mode of this project in one box edge: perception that answers
+    instead of refusing.
+
+  - **The badge is matched whole, with its aspect ratio intact** rather than stretched
+    to fill a canvas. "1" is narrow and "My" is wide, and at eight exemplars the
+    alphabet cannot afford to discard a dimension that cheap. Stretching also merges
+    "1" into "1ID", which is the pair that matters most.
+
+  Coverage is the live limitation: 8 of the 15 badges have been seen. The rest refuse,
+  which is the intended behaviour but a weaker guarantee than digits enjoy, because an
+  unseen two-glyph badge has seven seen ones to be wrong against. The member count is
+  what catches that -- but only when the true and guessed groups differ in size, so
+  Advent and Myth (both five) would not be separated by it. `LabelReader.uncovered`
+  names what is missing.
+
+  **The reveal screen is a trap worth knowing about.** Before the deal the game shows a
+  "Groups coming up" screen presenting the same four rows much larger and elsewhere. The
+  table boxes land on felt there, so the badges refuse -- but the panel box happens to
+  count [5, 5, 5, 5], four perfectly legal group sizes, so the count check alone waves it
+  through. The badges refusing is the only thing between that screen and a fabricated
+  roster. Reading it properly needs its own layout and would be worth having: it is the
+  cleanest, largest view of the roster the game ever shows.
+
 * **The bonus holomem is displayed as a full card** beside that panel, under the
   word BONUS, all round. So it reuses the same templates as hands and discards
   rather than needing the portrait set, and it never has to be inferred from a

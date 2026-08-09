@@ -30,7 +30,12 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from typing import TYPE_CHECKING
+
 from ..core.roster import ObservedGroup, ObservedRoster
+
+if TYPE_CHECKING:
+    from .group_labels import LabelReader
 
 GROUPS_FILE = Path(__file__).resolve().parents[2] / "data" / "captures" / "hololive_groups.yaml"
 
@@ -92,6 +97,19 @@ class GroupBook:
                 size=int(entry["size"]), members=members,
                 confirmed=entry.get("confirmed") == "capture",
             ))
+
+        # Badges have to be unique, because the badge is what a read produces and the
+        # group is what it has to mean. Two groups sharing one would make that lookup a
+        # coin toss -- and it nearly happened: the ID branches were recorded as badge "ID"
+        # for all three before a capture showed the game actually prints "1ID", "2ID" and
+        # "3ID". A silent duplicate there would have picked whichever came first.
+        badges = [group.badge for group in groups]
+        duplicated = sorted({b for b in badges if badges.count(b) > 1})
+        if duplicated:
+            raise PanelError(
+                f"badge(s) {', '.join(duplicated)} are used by more than one group -- "
+                f"a badge has to identify a group on its own"
+            )
         return cls(groups=tuple(groups), aliases=dict(raw.get("aliases") or {}))
 
     def by_id(self, group_id: str) -> Group:
@@ -99,6 +117,12 @@ class GroupBook:
             if group.id == group_id:
                 return group
         raise PanelError(f"unknown group {group_id!r}")
+
+    def by_badge(self, badge: str) -> Group:
+        for group in self.groups:
+            if group.badge == badge:
+                return group
+        raise PanelError(f"no group prints the badge {badge!r}")
 
     @property
     def characters(self) -> frozenset[str]:
@@ -238,3 +262,77 @@ def roster_from_groups(
         )
 
     return ObservedRoster(groups=tuple(groups), bonus_character=bonus)
+
+
+def read_roster(
+    panel: np.ndarray,
+    labels: np.ndarray,
+    *,
+    book: GroupBook,
+    reader: "LabelReader",
+    bonus: str | None = None,
+) -> ObservedRoster:
+    """The whole roster, from the panel grid and the badges beside it.
+
+    Three independent things have to agree before this returns, and it raises rather than
+    degrades if any of them does not:
+
+    1. the member counts are all plausible group sizes, which is what tells us the panel is
+       not currently hidden under a payout display;
+    2. every badge is read confidently -- a partial roster is not a roster, since a missing
+       group is four or five characters the deck contains and the agent does not know about;
+    3. each badge's known size matches the count in its own row.
+
+    The third is the one that earns its place. The first two are the reader agreeing with
+    itself; only the count is measured without recognising anything, so only the count can
+    contradict a confident misread.
+    """
+    counts = count_members(panel)
+    if not panel_is_readable(counts, book):
+        raise PanelError(
+            f"member counts {counts} are not four real group sizes -- the panel is "
+            f"covered, most likely by a payout display"
+        )
+
+    read = reader.read(labels)
+    refused = [(index, label) for index, label in enumerate(read) if not label.confident]
+    if refused:
+        detail = "; ".join(f"row {i + 1}: {label.reason}" for i, label in refused)
+        raise PanelError(f"could not read every badge -- {detail}")
+
+    return roster_from_groups(
+        book,
+        [book.by_badge(label.badge).id for label in read],
+        member_counts=counts,
+        bonus=bonus,
+    )
+
+
+def read_table_roster(
+    frame: np.ndarray,
+    area,
+    *,
+    book: GroupBook | None = None,
+    reader: "LabelReader | None" = None,
+    bonus: str | None = None,
+) -> ObservedRoster:
+    """`read_roster` against a whole captured frame, using the table layout.
+
+    Only the table layout. The game also shows a "Groups coming up" screen before the deal
+    that presents the same four rows much larger and in a different place; this will not
+    read it, and must not be pointed at it. Its boxes land on felt there, so the badges
+    refuse and nothing wrong is returned -- but the panel box happens to count [5, 5, 5, 5],
+    which is four legal group sizes, so the count check alone would have waved it through.
+    The badges refusing is the only thing standing between that screen and a fabricated
+    roster, which is worth knowing before anyone relaxes a threshold.
+    """
+    from . import layout
+    from .group_labels import LabelReader
+
+    book = book or GroupBook.load()
+    reader = reader if reader is not None else LabelReader.load()
+    return read_roster(
+        area.crop(frame, layout.GROUP_PANEL),
+        area.crop(frame, layout.GROUP_LABELS),
+        book=book, reader=reader, bonus=bonus,
+    )

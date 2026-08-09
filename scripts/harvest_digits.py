@@ -47,7 +47,14 @@ CASES = [
     ("20260809073119_1.jpg", layout.COINS["right"], "1020"),
     ("20260809004802_1.jpg", layout.COINS["left"], "920"),
     ("20260809004802_1.jpg", layout.COINS["right"], "1380"),
-    ("20260809005102_1.jpg", layout.COINS["right"], "1040"),
+    # Transcribed as "1040" originally, which was simply misread by eye -- the frame shows
+    # 2270. It cost nothing visible, because a digit's exemplar is the average of several
+    # sightings and one wrong one was outvoted, but it was quietly feeding a 2 into the 1
+    # and a 7 into the 4. Caught by reading every case back with the finished reader and
+    # comparing against its own transcription, which is worth doing whenever a case is
+    # added: the glyph-count check above only catches a case with the wrong NUMBER of
+    # digits, never one with the wrong digits.
+    ("20260809005102_1.jpg", layout.COINS["right"], "2270"),
     # The deck counter, which is smaller and darker than a coin total -- and the only
     # place 5 and 6 appear at all, since every payout is a multiple of ten so no coin
     # total ever ends in anything else.
@@ -58,6 +65,24 @@ CASES = [
     ("20260809004900_1.jpg", layout.DECK_COUNTER, "52"),
     ("20260809073119_1.jpg", layout.DECK_COUNTER, "30"),
     ("20260809073329_1.jpg", layout.DECK_COUNTER, "0"),
+    # The digit 5, which appears in no number anywhere on the table. Every payout is a
+    # multiple of ten, so no coin total ends in 5, and no deck counter caught one either.
+    #
+    # It is on screen all round regardless, as the Gen5 group badge -- and the badges are
+    # drawn in the same typeface as the numbers. That is measured rather than assumed: the
+    # exemplars harvested from coin totals above match the Gen1, Gen2, Gen3 and Gen4 badges
+    # at 0.97, 0.91, 0.86 and 0.96, which is the same range they score against the coin
+    # totals they came from. A 5 cut from a badge is therefore a 5.
+    #
+    # Note what this is NOT. The Gen5 *card* badge was tried first and does not work: it is
+    # white on a pink stroke, the body fragments around the stroke, and the pieces matched
+    # 1 at 0.47. The panel badge is white on green like everything else here.
+    #
+    # Worth confirming from a coin total or deck counter if one ever shows a 5, since this
+    # is the one exemplar reasoned across contexts rather than read where it will be used.
+    ("20260809073119_1.jpg", layout.group_label_row(2), "5"),
+    ("20260809073329_1.jpg", layout.group_label_row(2), "5"),
+    ("20260809004728_1.jpg", layout.group_label_row(2), "5"),
 ]
 
 

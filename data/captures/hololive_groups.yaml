@@ -33,10 +33,14 @@ groups:
   # absent. Inferred from the art the player has and the list of what they still need --
   # every holomem the game can deal is one they expect to capture, and she is not on it.
   # The same pattern already explains Gen3 without Rushia and Gen4 without Coco.
+  #
+  # The size is now confirmed rather than inferred: three captures show a row badged "1"
+  # holding four portraits and a placeholder. Which four is still inference.
   - id: gen1
     label: "Gen1"
     badge: "1"
     size: 4
+    confirmed: capture
     members: [aki_rosenthal, akai_haato, natsuiro_matsuri, shirakami_fubuki]
 
   # Fubuki is in both Gen1 and GAMERS, and her card art carries a per-group variant. The
@@ -50,11 +54,13 @@ groups:
     confirmed: capture
     members: [shirakami_fubuki, ookami_mio, nekomata_okayu, inugami_korone]
 
-  # Four for the same reason: Aqua has graduated.
+  # Four for the same reason: Aqua has graduated. Size confirmed by capture, membership
+  # still inferred.
   - id: gen2
     label: "Gen2"
     badge: "2"
     size: 4
+    confirmed: capture
     members: [murasaki_shion, nakiri_ayame, yuzuki_choco, oozora_subaru]
 
   - id: gen3
@@ -96,23 +102,29 @@ groups:
     size: 5
     members: [irys, ceres_fauna, ouro_kronii, nanashi_mumei, hakos_baelz]
 
+  # The ID branches print their generation NUMBER large with a small "ID" beneath it, so
+  # the badge is "1ID", not "ID". Recorded here as "ID" until a capture was looked at
+  # closely, which mattered more than it sounds: the label box was clipping the subscript,
+  # so ID Gen1 was reading as a confident bare "1" -- Gen1, a real group with four
+  # different members and no refusal anywhere in sight.
   - id: id1
     label: "ID Gen1"
-    badge: "ID"
+    badge: "1ID"
     size: 3
     confirmed: capture
     members: [ayunda_risu, moona_hoshinova, airani_iofifteen]
 
   - id: id2
     label: "ID Gen2"
-    badge: "ID"
+    badge: "2ID"
     size: 3
     members: [kureiji_ollie, anya_melfissa, pavolia_reine]
 
   - id: id3
     label: "ID Gen3"
-    badge: "ID"
+    badge: "3ID"
     size: 3
+    confirmed: capture
     members: [vestia_zeta, kaela_kovalskia, kobo_kanaeru]
 
   - id: advent

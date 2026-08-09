@@ -13,7 +13,7 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-218 tests passing.
+259 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
 themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
@@ -70,6 +70,44 @@ Segmentation is where every real failure came from — not one was a mismatched 
   backs blue. This is what lets a box stay wide enough for four digits — narrowing one to
   dodge the icon clipped the leading digit and turned 1430 into a confident **430**, which
   is the only kind of error that matters here.
+
+**And the roster reads end to end**, which was the piece everything else waits on — the
+slot space, the belief and every payout are sized by it. Three rounds' worth of clean
+frames give three different rosters of 15, 16 and 17 characters, and the 17-character one
+matches a transcription made by hand months of context earlier, group for group. No frame
+produced a wrong roster; the ones taken mid-payout refuse.
+
+It works by not recognising anybody. The game draws real hololive branches, so the four
+short badges beside the panel — "Ga", "4", "5", "My" — determine the whole membership via
+a committed table, and the panel's own member counts check the answer without recognising
+anything at all. That replaces up to twenty portrait matches, which had scored **1/17**,
+with a four-way classification plus arithmetic. Badges read at 0.94–0.98 with margins of
+0.20–0.45, against a best-of-anything-else of 0.52.
+
+The two traps were both silent-wrong rather than noisy-fail, which is the pattern this
+whole module is built against:
+
+- **A badge is not a digit even when it looks like one.** Feed "Ga" to the digit reader
+  and it answers **0**, at 0.74, with its runner-up 0.25 behind. A digit alphabet has
+  nothing for a G to compete against, so refusal never engages. Badges need their own
+  closed alphabet.
+- **"1ID" is ID Gen1 and "1" is Gen1** — different groups, different members, and the
+  entire difference is a small subscript. The first label box clipped it, so ID Gen1 read
+  as a confident Gen1 with nothing anywhere to object.
+
+Seven of the fifteen badges have never been captured and refuse until one is; a round
+dealing Gen0, Gen3, ID Gen2, holoX, Promise, Advent or ReGLOSS cannot be read yet.
+
+That work also closed the digit **5**, which appears in no number anywhere on the table —
+every payout is a multiple of ten, so no coin total ends in one. It was cut from the Gen5
+*badge* instead, the badges being the same typeface: coin-harvested exemplars match the
+Gen1–Gen4 badges at 0.86–0.97, the same range they score against the totals they came
+from. Adding it moved no existing read.
+
+Reading every harvest case back with the finished reader is worth the minute it takes: it
+found one transcribed as `1040` where the screen said `2270`, which had been feeding a `2`
+into the `1` exemplar and a `7` into the `4`. Averaging over several sightings had
+outvoted it, so nothing ever looked wrong.
 
 The reader's remaining hard part is now scoped rather than guessed. **Do not try to
 segment an opponent's discard field**: the seats either side lay their discards out as
@@ -167,7 +205,8 @@ M4  PIMC agent                             <- built and measured; does not beat 
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
 M7  hint mode + overlay                    <- done
-M8  screen reading                         <- the only thing left before live use
+M8  screen reading                         <- layout, cards, numbers and roster read;
+                                              ranks and per-turn tracking remain
 ```
 
 **M7 and M8 do not depend on M5 or M6**, and the roadmap's ordering is misleading
