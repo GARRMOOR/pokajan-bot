@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 259 tests, ~1 min.
+- `.\.venv\Scripts\python -m pytest` — 271 tests, ~1 min.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - `.\.venv\Scripts\python -m pokajan.server.overlay [--place|--check]` — the overlay.
@@ -92,6 +92,17 @@ wrong and not obvious from reading the code.
   guarding a specific regression, break the code and watch it fail** — cheap, and it
   is the only thing that distinguishes a guard from decoration.
 
+- **A card read must name an id the engine knows.** `templates.character_from_filename`
+  produces the catalogue's keys and they have to be canonical ids, punctuation and all folded
+  away — otherwise `identify` returns a name that is not a character in the loaded `Rules`
+  and the card cannot be turned into a slot at all. That was broken for exactly one holomem
+  and invisible for weeks, because the file that would have exposed it did not exist:
+  `ninomae_ina'nis` kept its apostrophe. It surfaced the moment the art arrived that
+  completed the catalogue, as 352 of 1365 rosters reporting a holomem with no art while
+  coverage read 62 of 62. **Naming something the engine has never heard of is worse than
+  refusing**, because a refusal is handled. Two normalisers now do this in different modules
+  and a test pins them together.
+
 - **The advisor is the only thing that talks to a human**, and its failure mode is a
   plausible sentence rather than a crash. Never let generated text imply more
   certainty than the number behind it: `_confidence` measures only whether the
@@ -114,6 +125,16 @@ rechecked rather than taken on trust.
 The general lesson, worth checking before spending compute anywhere: compare an
 estimator's sampling noise against the spread it must resolve. Below 1 and more
 samples help cheaply; well above 1 they cannot rescue it.
+
+On the vision side, same rule, three more negatives:
+
+| tried | result |
+|---|---|
+| Matching a group badge as one picture | "2ID" vs "3ID" **0.14 margin**, under the 0.15 threshold — and both groups have three members, so the member count cannot break the tie. Split the primary from the subscript: 0.26. |
+| Raising the badge canvas 28px → 96px to fix that | **No effect** (0.136 → 0.121). Resolution does not change a ratio of shared to distinguishing ink. |
+| Letterboxing a glyph to preserve its aspect | **Worse at every size** 12x18 to 36x36 — mean pairwise 0.31 vs 0.20, tightest real margin 0.15 vs 0.27. Identical padding *correlates*, dragging every pair toward 1 together. Stretch instead. |
+| Matching panel portraits against card art | **1/17.** They are a different rendering, not a crop; hence reading the badges at all. |
+| Reading a badge with `digits.DigitReader` | "Ga" → a **confident 0** at 0.74, runner-up 0.25 behind. A digit alphabet has nothing for a G to lose to. |
 
 ## The overlay does not depend on M5 or M6
 
@@ -206,20 +227,29 @@ belief inferring from gaps and nothing would look broken — there is a test.
 ## Working with the user
 
 They are the only source of game data, and they respond fast to **specific** requests —
-name the exact file, value or screen. Two open asks, neither blocking:
+name the exact file, value or screen. **Nothing is currently blocked on them** — every asset
+the reader needs has been supplied. What is still worth having, in rough order of value:
 
-- **frames showing the seven group badges never yet captured** — `0` (Gen0), `3` (Gen3),
-  `2ID` (ID Gen2), `X` (holoX), `Pr` (Promise), `Ad` (Advent), `Re` (ReGLOSS). A round
-  dealing one of those cannot have its roster read at all. `scripts\harvest_group_labels.py`
-  prints the current list every run.
-- **more card art**, currently 46 of 62 holomem. Coverage decides how often the reader
-  names a card rather than refusing.
+- **A coin total or deck counter showing a 5.** Not blocking; see below.
+- **A second frame of the zoomed-out wide shot** (only `20260809173544_1` has one). One frame
+  is not enough to decide whether that camera position is a stable screen worth its own
+  layout or a transient in the round-opening animation.
+- **A payout frame with the arrows and per-seat deltas legible**, when the split rule and the
+  red/cyan delta colours come to be read. The deltas are drawn coloured, so
+  `digits.MAX_INK_SATURATION` will have to be relaxed for them.
 
-Closed: **the digit 5**, which appears in no number on the table — every payout is a
-multiple of ten, so no coin total ends in one. It was cut from the Gen5 group *badge*
-instead, the badges being drawn in the same typeface (measured: coin-harvested exemplars
-match the Gen1–Gen4 badges at 0.86–0.97). Still worth confirming from a real coin total if
-one ever shows a 5, since it is the one exemplar reasoned across contexts.
+Closed, and worth knowing why so none gets re-asked:
+
+- **Card art: 62 of 62 holomem**, so all 1365 possible four-group rosters are fully covered.
+  `scripts\check_vision.py` prints that combination count every run, which is the claim worth
+  making — "complete for the rounds we have screenshots of" is not.
+- **All fifteen group badges**, from seven "Groups coming up" reveal frames plus the table
+  view. `scripts\harvest_group_labels.py` prints coverage every run.
+- **The digit 5**, which appears in no number on the table — every payout is a multiple of
+  ten, so no coin total ends in one. Cut from the Gen5 group *badge* instead, the badges
+  being drawn in the same typeface (measured: coin-harvested exemplars match the Gen1–Gen4
+  badges at 0.86–0.97). Still worth confirming from a real coin total if one ever shows a 5,
+  since it is the one exemplar reasoned across contexts rather than read where it is used.
 
 They fix misnamed art at source when told, and have offered to let us rename files
 directly — either is fine, but **say which**. Do not fuzzy-match a filename to avoid

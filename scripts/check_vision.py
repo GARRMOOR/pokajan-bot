@@ -1,4 +1,4 @@
-"""Score the card reader against real screenshots.
+r"""Score the card reader against real screenshots.
 
     .\.venv\Scripts\python scripts\check_vision.py
 
@@ -61,13 +61,58 @@ CASES = [
 ]
 
 
+def _report_catalogue(templates: TemplateSet) -> None:
+    """Whether the catalogue covers the whole agency, and every roster it can deal.
+
+    The per-roster answer is the one that matters and it is the one `TemplateSet.missing_from`
+    exists to give, because it has to be known *before* a round starts: a holomem with no art
+    is a card nobody can name, and finding that out mid-hand means finding it out as a
+    refusal in the middle of advising.
+
+    Reported against every four-group combination rather than against the rosters that happen
+    to be in `data/tables/`. There are only 1365 of them and the game picks freely, so
+    "complete for the rounds we have screenshots of" is not the claim worth making.
+    """
+    import itertools
+
+    from pokajan.core.roster import ObservedGroup, ObservedRoster
+    from pokajan.vision.roster_panel import GroupBook
+
+    book = GroupBook.load()
+    names = sorted(path.stem for path in CARDS.iterdir()
+                   if path.suffix.lower() in {".jpg", ".jpeg", ".png"})
+    resolved, unresolved, missing = book.coverage(names)
+    print(f"  {len(set(resolved.values()))} of {len(book.characters)} holomem in "
+          f"hololive_groups.yaml, from {len(names)} files")
+    if unresolved:
+        print(f"  FILENAMES TO FIX: {' '.join(unresolved)}")
+    if missing:
+        print(f"  NO ART YET: {' '.join(missing)}")
+
+    incomplete = []
+    for combination in itertools.combinations(book.groups, 4):
+        roster = ObservedRoster(groups=tuple(
+            ObservedGroup(id=g.id, name=g.label, members=g.members) for g in combination))
+        if len({m for g in combination for m in g.members}) != len(roster.characters):
+            continue                       # a holomem in two of the four; core/roster refuses
+        if templates.missing_from(roster):
+            incomplete.append(combination)
+    total = sum(1 for _ in itertools.combinations(book.groups, 4))
+    if incomplete:
+        print(f"  {len(incomplete)} of {total} possible rosters have a holomem with no art")
+    else:
+        print(f"  every one of the {total} possible rosters is fully covered")
+    print()
+
+
 def main() -> int:
     if not CARDS.is_dir():
         print(f"no card art at {CARDS} -- nothing to check")
         return 2
 
     templates = TemplateSet.load(CARDS)
-    print(f"loaded art for {len(templates)} holomem\n")
+    print(f"loaded art for {len(templates)} holomem")
+    _report_catalogue(templates)
 
     total = named = coloured = refused = 0
     for filename, box, expected in CASES:

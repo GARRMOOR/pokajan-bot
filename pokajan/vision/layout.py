@@ -146,11 +146,44 @@ def group_label_row(index: int) -> Box:
     because a single row is occasionally wanted on its own -- `scripts/harvest_digits.py`
     cuts the digit 5 out of a Gen5 badge, there being no coin total that ends in one.
     """
+    return label_row(GROUP_LABELS, index)
+
+
+def label_row(box: Box, index: int) -> Box:
+    """One of the four badge bands inside a label box, whichever screen it came from."""
     if not 0 <= index < GROUP_ROWS:
         raise IndexError(f"panel has {GROUP_ROWS} rows, asked for {index}")
-    span = (GROUP_LABELS.bottom - GROUP_LABELS.top) / GROUP_ROWS
-    return Box(GROUP_LABELS.left, GROUP_LABELS.top + index * span,
-               GROUP_LABELS.right, GROUP_LABELS.top + (index + 1) * span)
+    span = (box.bottom - box.top) / GROUP_ROWS
+    return Box(box.left, box.top + index * span, box.right, box.top + (index + 1) * span)
+
+
+# ------------------------------------------------------- the reveal screen ----
+#
+# "Groups coming up", shown before the deal: the same four rows and the same four badges,
+# drawn about four times the size and over on the left, with the bonus holomem as a large
+# card on the right. Measured from data/tables/20260809164608_1.jpg and checked by drawing
+# them back on.
+#
+# Worth reading rather than skipping past, for two reasons. It is the cleanest view of the
+# roster the game ever shows -- nothing occludes it, and the portraits are large enough to
+# recognise if that is ever wanted -- and it arrives *before* the first turn, so a reader
+# that catches it starts the round already knowing what is in the deck rather than working
+# it out from the smaller table panel.
+#
+# It is also a screen the table boxes must never be pointed at. They land on felt there, so
+# the badges refuse -- but the table panel box happens to count [5, 5, 5, 5] on it, which is
+# four perfectly legal group sizes. The badge refusal is the only thing between this screen
+# and a fabricated roster, which is why the two layouts are named separately instead of one
+# being tried as a fallback for the other.
+#
+# The screen animates in, and a mid-animation frame is at a different scale entirely. Those
+# refuse on the member count, which is the intended behaviour rather than a lucky one.
+REVEAL_PANEL = Box(0.039, 0.173, 0.342, 0.821)
+REVEAL_LABELS = Box(0.378, 0.168, 0.490, 0.840)
+
+
+def reveal_label_row(index: int) -> Box:
+    return label_row(REVEAL_LABELS, index)
 BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 
 # Card rows. Deliberately loose: a discard field is one card wide at the deal and five

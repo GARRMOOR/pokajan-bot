@@ -35,30 +35,34 @@ COLOURS = {
 
 
 def _report_roster(frame: np.ndarray, area: layout.PlayArea) -> None:
-    """What the panel and its badges say the roster is -- or why they refuse.
+    """What each layout's panel and badges say the roster is -- or why they refuse.
 
-    Printed here because it is the one read that can be checked against the screenshot at
-    a glance, and because a refusal names which of the three agreements failed.
+    Both screens are reported, not just the one the frame is of. A frame is only ever one of
+    them, so the other layout's line is the wrong-screen behaviour being shown rather than
+    asserted: it should refuse, and if it ever stops refusing that is visible here first.
     """
     from pokajan.vision.group_labels import LabelReader
-    from pokajan.vision.roster_panel import (
-        GroupBook, PanelError, count_members, read_table_roster,
-    )
+    from pokajan.vision.roster_panel import GroupBook, PanelError, count_members, read_roster
 
     book, reader = GroupBook.load(), LabelReader.load()
-    print("\nroster:")
-    print(f"  member counts   {count_members(area.crop(frame, layout.GROUP_PANEL))}")
-    for row, badge in enumerate(reader.read(area.crop(frame, layout.GROUP_LABELS))):
-        detail = (f"{badge.badge!r} score {badge.score:.2f} margin {badge.margin:.2f}"
-                  if badge.confident else f"refused -- {badge.reason}")
-        print(f"  badge row {row + 1}     {detail}")
-    try:
-        roster = read_table_roster(frame, area, book=book, reader=reader)
-    except PanelError as error:
-        print(f"  REFUSED: {error}")
-        return
-    print(f"  {len(roster.characters)} characters: "
-          + ", ".join(f"{g.name}({len(g.members)})" for g in roster.groups))
+    for screen, panel_box, labels_box in (
+        ("table", layout.GROUP_PANEL, layout.GROUP_LABELS),
+        ("reveal", layout.REVEAL_PANEL, layout.REVEAL_LABELS),
+    ):
+        print(f"\nroster, {screen} layout:")
+        print(f"  member counts   {count_members(area.crop(frame, panel_box))}")
+        for row, badge in enumerate(reader.read(area.crop(frame, labels_box))):
+            detail = (f"{badge.badge!r} score {badge.score:.2f} margin {badge.margin:.2f}"
+                      if badge.confident else f"refused -- {badge.reason}")
+            print(f"  badge row {row + 1}     {detail}")
+        try:
+            roster = read_roster(area.crop(frame, panel_box), area.crop(frame, labels_box),
+                                 book=book, reader=reader)
+        except PanelError as error:
+            print(f"  REFUSED: {error}")
+            continue
+        print(f"  {len(roster.characters)} characters: "
+              + ", ".join(f"{g.name}({len(g.members)})" for g in roster.groups))
 
 
 def main(argv: list[str]) -> int:
@@ -93,6 +97,11 @@ def main(argv: list[str]) -> int:
     # on "My" and the ID branches' subscript. None of that is checkable from one outline.
     for row in range(layout.GROUP_ROWS):
         regions.append((f"badge {row}", "badges", layout.group_label_row(row)))
+    # The reveal screen's own boxes, drawn on every frame so that pointing this at a
+    # "Groups coming up" capture checks them as directly as the table ones.
+    regions.append(("reveal groups", "groups", layout.REVEAL_PANEL))
+    for row in range(layout.GROUP_ROWS):
+        regions.append((f"reveal badge {row}", "badges", layout.reveal_label_row(row)))
     for seat in layout.SEAT_ORDER:
         regions.append((f"disc {seat}", "discards", layout.DISCARDS[seat]))
         regions.append((f"coins {seat}", "coins", layout.COINS[seat]))

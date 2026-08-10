@@ -202,6 +202,22 @@ def test_graduated_members_are_left_out(book):
     assert "minato_aqua" not in book.characters
 
 
+def test_a_group_variant_filename_is_not_reported_as_a_problem(book):
+    """Fubuki is in both Gen1 and GAMERS and has a per-group art file.
+
+    `templates.py` collapses that suffix at load time, so `coverage` has to use the same
+    rule or it reports a filename to fix that is already correct -- and the player goes off
+    renaming a file the loader was reading happily. An unresolved list that cries wolf gets
+    ignored, which is worse than not having one.
+    """
+    resolved, unresolved, _ = book.coverage(
+        ["shirakami_fubuki_COLORLESS", "shirakami_fubuki_GAMERS_COLORLESS"]
+    )
+
+    assert unresolved == []
+    assert set(resolved.values()) == {"shirakami_fubuki"}
+
+
 def test_an_unrecognised_filename_is_reported_not_guessed(book):
     """`usada_pekore` is one letter from a real holomem, and that is exactly why.
 

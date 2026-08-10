@@ -157,11 +157,20 @@ class GroupBook:
         Three lists because they need three different responses: resolved art is usable,
         unresolved art is a filename to fix, and a holomem with no art is simply one the
         reader will refuse to name until a capture provides it.
+
+        Filenames go through `templates.character_from_filename` first, so the same rule
+        decides identity here as at load time. That is not tidiness: Fubuki is in both Gen1
+        and GAMERS and has a per-group art file, and without the shared rule this reported
+        `shirakami_fubuki_GAMERS` as a filename to fix -- sending the player off to rename a
+        file `templates.py` was already loading happily. An unresolved list that cries wolf
+        gets ignored, which is worse than not having one.
         """
+        from .templates import character_from_filename
+
         resolved: dict[str, str] = {}
         unresolved: list[str] = []
         for name in art_names:
-            canonical = self.resolve(name)
+            canonical = self.resolve(character_from_filename(name))
             if canonical:
                 resolved[name] = canonical
             else:
@@ -316,23 +325,48 @@ def read_table_roster(
     reader: "LabelReader | None" = None,
     bonus: str | None = None,
 ) -> ObservedRoster:
-    """`read_roster` against a whole captured frame, using the table layout.
+    """`read_roster` against a whole captured frame, using the **table** layout.
 
-    Only the table layout. The game also shows a "Groups coming up" screen before the deal
-    that presents the same four rows much larger and in a different place; this will not
-    read it, and must not be pointed at it. Its boxes land on felt there, so the badges
-    refuse and nothing wrong is returned -- but the panel box happens to count [5, 5, 5, 5],
-    which is four legal group sizes, so the count check alone would have waved it through.
-    The badges refusing is the only thing standing between that screen and a fabricated
-    roster, which is worth knowing before anyone relaxes a threshold.
+    Wrong-screen safety is measured rather than argued. Pointed at the reveal screen these
+    boxes produce not one confident badge across seven frames -- but the panel box happens to
+    count [5, 5, 5, 5] there, which is four perfectly legal group sizes, so the count check
+    alone would have waved it through. The badges refusing is the only thing between that
+    screen and a fabricated roster, which is worth knowing before anyone relaxes a threshold.
     """
+    return _read(frame, area, layout_names=("GROUP_PANEL", "GROUP_LABELS"),
+                 book=book, reader=reader, bonus=bonus)
+
+
+def read_reveal_roster(
+    frame: np.ndarray,
+    area,
+    *,
+    book: GroupBook | None = None,
+    reader: "LabelReader | None" = None,
+    bonus: str | None = None,
+) -> ObservedRoster:
+    """`read_roster` against the "Groups coming up" screen shown before the deal.
+
+    Worth reading rather than waiting for the table: it is the largest and cleanest view of
+    the roster the game ever shows, nothing occludes it, and it arrives before the first turn
+    -- so a reader that catches it starts the round already knowing what is in the deck.
+
+    Same wrong-screen result in the other direction: on a table frame these boxes produce no
+    confident badge either. Neither layout is a fallback for the other, and they are named
+    separately so that nobody makes one.
+    """
+    return _read(frame, area, layout_names=("REVEAL_PANEL", "REVEAL_LABELS"),
+                 book=book, reader=reader, bonus=bonus)
+
+
+def _read(frame, area, *, layout_names, book, reader, bonus):
     from . import layout
     from .group_labels import LabelReader
 
+    panel_box, labels_box = (getattr(layout, name) for name in layout_names)
     book = book or GroupBook.load()
     reader = reader if reader is not None else LabelReader.load()
     return read_roster(
-        area.crop(frame, layout.GROUP_PANEL),
-        area.crop(frame, layout.GROUP_LABELS),
+        area.crop(frame, panel_box), area.crop(frame, labels_box),
         book=book, reader=reader, bonus=bonus,
     )

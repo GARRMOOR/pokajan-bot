@@ -171,11 +171,44 @@ def test_something_that_is_not_a_card_is_not_given_a_colour():
     # of the identity. Collapsing them is also what keeps the margin meaningful.
     ("shirakami_fubuki_COLORLESS", "shirakami_fubuki"),
     ("shirakami_fubuki_GAMERS_COLORLESS", "shirakami_fubuki"),
-    # Lowercase, punctuation and all, must survive.
-    ("ninomae_ina'nis_COLORLESS", "ninomae_ina'nis"),
+    # Punctuation is folded away, because no id the rest of the program uses has any.
+    ("ninomae_ina'nis_COLORLESS", "ninomae_inanis"),
+    ("la+plus_darkness_COLORLESS", "laplus_darkness"),
 ])
-def test_group_variants_collapse_to_one_holomem(stem, expect):
+def test_a_filename_becomes_the_id_the_engine_uses(stem, expect):
     assert character_from_filename(stem) == expect
+
+
+def test_a_template_id_is_a_name_the_group_table_knows():
+    """The rest of the program keys on canonical ids, so a template must produce one.
+
+    This used to fail on exactly one holomem and nothing noticed, because the failing
+    filename did not exist yet: `ninomae_ina'nis` kept its apostrophe, so `identify` named a
+    character the loaded `Rules` had never heard of and the card could not be turned into a
+    slot. It surfaced the moment the art arrived that completed the catalogue -- 352 of the
+    1365 possible rosters reporting a holomem with no art while coverage read 62 of 62.
+
+    Naming something the engine does not know is worse than refusing, because a refusal is
+    handled and this is not.
+    """
+    from pokajan.vision.roster_panel import GroupBook
+
+    book = GroupBook.load()
+    for character in book.characters:
+        assert character_from_filename(f"{character}_COLORLESS") == character
+
+
+def test_the_two_normalisers_agree():
+    """`templates` and `roster_panel` fold punctuation independently; they must not drift.
+
+    Independent because neither should import the other for this, but the two ids meet
+    whenever art coverage is checked against a roster -- so a difference would read as a
+    holomem with no art, which is what the bug above looked like.
+    """
+    from pokajan.vision.roster_panel import _normalise_id
+
+    for raw in ("ninomae_ina'nis", "la+plus_darkness", "gawr_gura", "IRyS"):
+        assert character_from_filename(f"{raw}_COLORLESS") == _normalise_id(raw)
 
 
 def catalogue(seeds) -> TemplateSet:

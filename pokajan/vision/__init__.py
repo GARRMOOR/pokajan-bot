@@ -144,14 +144,15 @@ depends on:
   four-way classification and an arithmetic check, and the check is what catches a
   misread label rather than trusting it.
 
-  **This is built and measured.** Every capture whose panel is not covered reads all
-  four badges at 0.94 to 0.98 with margins of 0.20 to 0.45, and produces the whole
-  roster: three different rounds, 15, 16 and 17 characters, and the 17-character one
-  matches the hand transcription in `data/captures/rounds_observed.yaml` exactly. No
-  frame produced a wrong answer; the covered ones refuse. See vision/group_labels.py.
+  **This is built, complete, and measured.** All fifteen badges the game can print are
+  covered, on both screens that show them. Across every capture: **56 badges read, 0
+  wrong, 12 refused; 12 rosters read, 0 wrong, 5 refused.** Scores run 0.82 to 0.98 and
+  the tightest margin on a correct answer is 0.22, against a threshold of 0.15. Six
+  distinct rosters of 15, 16 and 17 characters, and the 17-character one matches the hand
+  transcription in `data/captures/rounds_observed.yaml` group for group. Every refusal is
+  a frame where a payout panel covers the grid, or the reveal screen mid-animation.
 
-  Three things about the badges are not guessable from a single glance and each cost
-  something to learn:
+  Four things about the badges are not guessable from a glance, and each cost something:
 
   - **A badge is not a digit, even when it looks like one.** Six groups print a bare
     numeral, but GAMERS prints "Ga", Myth "My", and the ID branches print their
@@ -166,25 +167,41 @@ depends on:
     whole failure mode of this project in one box edge: perception that answers
     instead of refusing.
 
-  - **The badge is matched whole, with its aspect ratio intact** rather than stretched
-    to fill a canvas. "1" is narrow and "My" is wide, and at eight exemplars the
-    alphabet cannot afford to discard a dimension that cheap. Stretching also merges
-    "1" into "1ID", which is the pair that matters most.
+  - **The primary glyph and the subscript are matched separately.** Matching each badge
+    as one picture worked at eight badges and broke at fifteen: "2ID" and "3ID" scored
+    0.86 against each other, 0.14 of margin where the threshold wants 0.15, because the
+    identical "ID" is most of the picture. Raising the canvas from 28px to 96px did not
+    move it -- resolution does not change a ratio of shared to distinguishing ink.
 
-  Coverage is the live limitation: 8 of the 15 badges have been seen. The rest refuse,
-  which is the intended behaviour but a weaker guarantee than digits enjoy, because an
-  unseen two-glyph badge has seven seen ones to be wrong against. The member count is
-  what catches that -- but only when the true and guessed groups differ in size, so
-  Advent and Myth (both five) would not be separated by it. `LabelReader.uncovered`
-  names what is missing.
+    That is also the worst pair in the set to get wrong, because ID Gen2 and ID Gen3 both
+    have three members, so the member count -- the one check independent of the reader --
+    cannot break the tie. Compared as bare numerals they score 0.74, a margin of 0.26.
+    The subscript is separable by geometry alone: a column run of its own, starting around
+    0.55 of the badge's width and confined to the lower half, consistent across a fourfold
+    scale change. It is then *matched* rather than merely counted, so a subscript that is
+    present and does not look like "ID" refuses.
 
-  **The reveal screen is a trap worth knowing about.** Before the deal the game shows a
-  "Groups coming up" screen presenting the same four rows much larger and elsewhere. The
-  table boxes land on felt there, so the badges refuse -- but the panel box happens to
-  count [5, 5, 5, 5], four perfectly legal group sizes, so the count check alone waves it
-  through. The badges refusing is the only thing between that screen and a fabricated
-  roster. Reading it properly needs its own layout and would be worth having: it is the
-  cleanest, largest view of the roster the game ever shows.
+  - **Each glyph is stretched to fill the canvas, not letterboxed into it** -- the
+    opposite of the intuitive choice, and measured. Preserving aspect is worse at every
+    canvas size from 12x18 to 36x36: mean pairwise score 0.31 against 0.20, tightest real
+    margin 0.15 against 0.27. Identical padding *correlates*, so two badges sharing
+    nothing but their empty margins still agree over those margins and every score is
+    dragged toward 1 together. Splitting the subscript off is what made stretching safe,
+    since aspect was only ever separating "1" from "1ID".
+
+  A badge is finally composed and then **checked against the list of badges the game
+  actually prints**. Without that check a "Ga" with an "ID" under it reads as "GaID" at
+  0.93, confidently, and there is no such group.
+
+  **Both screens read, and neither is a fallback for the other.** The table panel sits out
+  the whole round; the "Groups coming up" reveal screen before the deal shows the same four
+  rows about four times the size, and is the largest and cleanest view of the roster the
+  game ever gives -- worth catching because it arrives before the first turn. Each has its
+  own boxes in layout.py. Pointed at the wrong screen, neither produces a single confident
+  badge across every capture tried -- but *the table panel box counts [5, 5, 5, 5] on the
+  reveal screen*, four perfectly legal group sizes, so the count check alone would wave it
+  through. The badges refusing is the only thing between the wrong screen and a fabricated
+  roster, which is worth knowing before anyone relaxes a threshold.
 
 * **The bonus holomem is displayed as a full card** beside that panel, under the
   word BONUS, all round. So it reuses the same templates as hands and discards

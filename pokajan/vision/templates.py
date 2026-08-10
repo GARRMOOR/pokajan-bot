@@ -83,15 +83,27 @@ class Match:
 
 
 def character_from_filename(stem: str) -> str:
-    """The holomem id a template filename refers to.
+    """The canonical holomem id a template filename refers to.
 
-    Group suffixes are stripped, so `shirakami_fubuki` and
-    `shirakami_fubuki_GAMERS` are one identity. Uppercase-only suffixes, because
-    holomem ids are lowercase and group tags in these filenames are not -- which is
-    what keeps `ninomae_ina'nis` intact.
+    Two normalisations, and the second was missing for a long time without anything
+    noticing.
+
+    Group suffixes are stripped, so `shirakami_fubuki` and `shirakami_fubuki_GAMERS`
+    are one identity. Uppercase-only suffixes, because holomem ids are lowercase and
+    the group tags in these filenames are not.
+
+    **And punctuation is folded away**, because the ids the rest of the program uses
+    have none. Keeping `ninomae_ina'nis` intact -- which this deliberately used to do
+    -- meant `identify` returned a name that was not a character in the loaded `Rules`,
+    so the card could not be turned into a slot at all. It stayed invisible while Ina
+    had no art: the bug arrived with the file that completed the catalogue, and showed
+    up as 352 of the 1365 possible rosters reporting a holomem with no art while the
+    catalogue reported 62 of 62. A read that names something the engine has never
+    heard of is worse than a refusal, because a refusal is handled.
     """
     matched = _FILENAME.match(stem)
-    return (matched.group("cid") if matched else stem).lower()
+    bare = (matched.group("cid") if matched else stem).lower()
+    return "".join(c for c in bare if c.isalnum() or c == "_")
 
 
 class TemplateSet:

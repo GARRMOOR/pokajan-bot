@@ -13,7 +13,7 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-259 tests passing.
+271 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
 themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
@@ -39,10 +39,26 @@ each replaced something that seemed more obvious:
   a wrong answer cannot do is stand apart from the field: correct matches beat the
   runner-up by 0.34 or more, while the also-rans sat within hundredths of each other.
 
-An incomplete catalogue is the normal state rather than an error state — the roster is
-redrawn every round, so a game can always deal somebody whose card has never been
-captured. `core/roster.py` builds a game around whatever roster a round deals, 14 to 19
-holomem across four groups, verified by playing every shape.
+The catalogue is now **complete: 62 of 62 holomem, so all 1365 possible four-group rosters
+are fully covered.** That is the claim worth making rather than "complete for the rounds we
+have screenshots of", and `check_vision.py` recomputes the combination count every run.
+Doubling the catalogue barely moved the margins — 46 → 62 holomem cost the worst case 0.42
+to 0.42 and the tightest overall 0.24 to 0.22, against a threshold of 0.12 — which is the
+third time adding art has failed to make identification harder.
+
+Completing it did expose a real bug, of the worst available kind. `ninomae_ina'nis` kept its
+apostrophe through the filename rule, so the catalogue keyed on a name the engine has never
+heard of: `identify` would have returned a character that is not in the loaded `Rules`, and
+the card could not be turned into a slot at all. It had been invisible for weeks because the
+file that would expose it did not exist. **Naming something the engine does not know is worse
+than refusing, because a refusal is handled.** It showed up as 352 of 1365 rosters reporting a
+holomem with no art while coverage read 62 of 62 — two numbers that cannot both be true.
+
+An incomplete catalogue remains the *normal* state rather than an error state even so, because
+the roster is redrawn every round and hololive keeps debuting people. `core/roster.py` builds
+a game around whatever roster a round deals, 14 to 19 holomem across four groups, verified by
+playing every shape, and `TemplateSet.missing_from` answers "can I name every card this round"
+before the first turn rather than mid-hand.
 
 Regions are fractions of a **found** play area, not pixels: the game renders 16:9 and
 letterboxes it, so the bars get trimmed first and everything is relative to what is
@@ -72,31 +88,55 @@ Segmentation is where every real failure came from — not one was a mismatched 
   is the only kind of error that matters here.
 
 **And the roster reads end to end**, which was the piece everything else waits on — the
-slot space, the belief and every payout are sized by it. Three rounds' worth of clean
-frames give three different rosters of 15, 16 and 17 characters, and the 17-character one
-matches a transcription made by hand months of context earlier, group for group. No frame
-produced a wrong roster; the ones taken mid-payout refuse.
+slot space, the belief and every payout are sized by it. Across every capture:
+
+```
+badges  56 read   0 wrong   12 refused        scores 0.82-0.98, tightest margin 0.22
+roster  12 read   0 wrong    5 refused        15, 16 and 17 characters, six rosters
+```
+
+All fifteen badges the game can print are covered, on both screens that show them. Every
+refusal is a frame where a payout panel covers the grid or the reveal screen mid-animation.
+The 17-character read matches a transcription made by hand, group for group.
 
 It works by not recognising anybody. The game draws real hololive branches, so the four
 short badges beside the panel — "Ga", "4", "5", "My" — determine the whole membership via
 a committed table, and the panel's own member counts check the answer without recognising
 anything at all. That replaces up to twenty portrait matches, which had scored **1/17**,
-with a four-way classification plus arithmetic. Badges read at 0.94–0.98 with margins of
-0.20–0.45, against a best-of-anything-else of 0.52.
+with a four-way classification plus arithmetic.
 
-The two traps were both silent-wrong rather than noisy-fail, which is the pattern this
-whole module is built against:
+Four findings, and every one of them is about a *confidently wrong* answer rather than a
+failure to read — which is the only error class that matters here:
 
 - **A badge is not a digit even when it looks like one.** Feed "Ga" to the digit reader
   and it answers **0**, at 0.74, with its runner-up 0.25 behind. A digit alphabet has
-  nothing for a G to compete against, so refusal never engages. Badges need their own
-  closed alphabet.
+  nothing for a G to compete against, so refusal never engages.
 - **"1ID" is ID Gen1 and "1" is Gen1** — different groups, different members, and the
   entire difference is a small subscript. The first label box clipped it, so ID Gen1 read
   as a confident Gen1 with nothing anywhere to object.
+- **Match the primary glyph and the subscript separately.** Matching each badge whole
+  worked at eight badges and broke at fifteen: "2ID" and "3ID" scored 0.86 against each
+  other — 0.14 of margin where 0.15 is required — because the identical "ID" is most of the
+  picture. Raising the canvas from 28px to 96px moved it not at all, since resolution does
+  not change a ratio. That is also the worst pair in the set to lose, because ID Gen2 and
+  ID Gen3 both have three members, so the member count cannot break the tie. As bare
+  numerals they score 0.74, a margin of 0.26.
+- **Stretch each glyph to fill the canvas; do not letterbox it.** The intuitive choice is
+  to keep the aspect, since "1" is narrow and "My" is wide. Measured, that is worse at
+  every canvas size from 12x18 to 36x36 — mean pairwise score 0.31 against 0.20, tightest
+  real margin 0.15 against 0.27 — because identical padding *correlates*, so two badges
+  sharing nothing but their empty margins still agree over those margins.
 
-Seven of the fifteen badges have never been captured and refuse until one is; a round
-dealing Gen0, Gen3, ID Gen2, holoX, Promise, Advent or ReGLOSS cannot be read yet.
+The composed badge is then checked against the list the game actually prints. Without that,
+a "Ga" with an "ID" under it reads as "GaID" at 0.93, and there is no such group.
+
+Both screens read, and **neither is a fallback for the other**. The table panel sits out the
+whole round; the "Groups coming up" screen before the deal shows the same rows four times
+the size and is worth catching because it arrives before the first turn. Pointed at the
+wrong screen neither produces a single confident badge — but the table panel box counts
+[5, 5, 5, 5] on the reveal screen, four legal group sizes, so the count check alone would
+wave it through. The badges refusing is the only thing between a wrong screen and an
+invented roster.
 
 That work also closed the digit **5**, which appears in no number anywhere on the table —
 every payout is a multiple of ten, so no coin total ends in one. It was cut from the Gen5
