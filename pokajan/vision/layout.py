@@ -223,11 +223,24 @@ DISCARDS = {
 # The left seat's box also stops short of that seat's card backs. They are full-height,
 # so they both bridged the name band into the number band and then passed the aspect test
 # as a tall narrow "digit" -- every three-digit total there came back with four glyphs.
+#
+# **The "starts to the right of the icon" claim above was false, and a live capture proved
+# it.** The icon was inside these boxes all along. On Steam's JPEGs it is saturated enough
+# that the pale-ink filter shreds it into 8-16 pixel fragments, which the height filter then
+# drops -- so it looked excluded when it was merely being tidied away. A live monitor grab of
+# the same box renders it less saturated, it survives as two 54-56 pixel "glyphs", and
+# `coins_bottom` refused on *every frame of a real session* with "found 6 glyphs, more than 5".
+#
+# The lesson is larger than these four numbers: **a threshold tuned on Steam screenshots does
+# not necessarily transfer to a live grab of the same pixels.** Excluding something by geometry
+# is durable; trusting a colour filter to remove it is a bet on the capture path. The left
+# edges below are measured from where the leftmost digit of a four-digit total actually starts
+# in a live frame -- the widest case a seat can hold, since no total can exceed about 4030.
 COINS = {
-    "bottom": Box(0.048, 0.760, 0.160, 0.815),
-    "left": Box(0.042, 0.245, 0.124, 0.300),
-    "top": Box(0.696, 0.150, 0.800, 0.205),
-    "right": Box(0.885, 0.245, 0.985, 0.300),
+    "bottom": Box(0.0825, 0.760, 0.160, 0.815),
+    "left": Box(0.0555, 0.245, 0.124, 0.300),
+    "top": Box(0.7015, 0.150, 0.800, 0.205),
+    "right": Box(0.9090, 0.245, 0.985, 0.300),
 }
 RANKS = {
     "bottom": Box(0.105, 0.680, 0.165, 0.735),

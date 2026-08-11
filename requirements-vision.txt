@@ -10,3 +10,8 @@
 # where the array operation *is* the work.
 numpy==2.5.2
 pillow==12.3.0
+# Screen grabbing. Read-only by design and by scope: this project never sends input to
+# the game -- no synthetic clicks, no keystrokes -- so a capture library is the entire
+# input surface. mss is chosen for being small, dependency-free and returning a raw
+# buffer we can wrap in numpy without a copy through PNG.
+mss==10.1.0

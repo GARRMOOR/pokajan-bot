@@ -203,15 +203,10 @@ def advance(session: Session, turns: int) -> None:
         session.act(payload["decision"]["legal_mask"].index(True))
 
 
-@given(cfg=rules_configs(), seed=st.integers(0, 5_000))
-@SETTINGS
-def test_a_hint_is_always_a_move_the_human_could_make(cfg, seed):
-    rules = Rules.from_dict(cfg)
-    session = Session(rules, human_seat=1, seed=seed)
-    session.hint_particles = 48
-
+def _hints_are_legal(session, turns: int = 30) -> int:
+    """Ask for a hint at every human decision and check it is playable. Returns how many."""
     asked = 0
-    for _ in range(30):
+    for _ in range(turns):
         payload = session.payload()
         if payload["state"]["finished"] or payload["decision"] is None:
             break
@@ -222,7 +217,41 @@ def test_a_hint_is_always_a_move_the_human_could_make(cfg, seed):
         assert reply["ms"] >= 0.0
         asked += 1
         session.act(payload["decision"]["legal_mask"].index(True))
-    assert asked > 0
+    return asked
+
+
+@given(cfg=rules_configs(), seed=st.integers(0, 5_000))
+@SETTINGS
+def test_a_hint_is_always_a_move_the_human_could_make(cfg, seed):
+    """Under *any* config: a hint the human cannot play is worse than no hint at all.
+
+    Nothing here asserts that the human ever gets a turn, and that omission is deliberate
+    rather than lax. It used to assert exactly that, and Hypothesis eventually found the config
+    which makes it wrong -- group payouts scaling to 4900 against a 1000-coin start, so the
+    first call bankrupts somebody and the game ends before seat 1 has decided once. Nothing was
+    broken; the guard was.
+
+    The guard existed for a good reason, since a loop that never runs asserts nothing. It moved
+    to `test_hints_are_asked_for_repeatedly_under_the_real_rules`, where the payouts are the
+    ones the game actually uses and a turn count can be pinned without lying.
+    """
+    session = Session(Rules.from_dict(cfg), human_seat=1, seed=seed)
+    session.hint_particles = 48
+
+    _hints_are_legal(session)
+
+
+def test_hints_are_asked_for_repeatedly_under_the_real_rules(real_rules):
+    """The anti-vacuity half, somewhere a turn count can honestly be asserted.
+
+    The property test above cannot promise the human ever acts, because a *generated* config may
+    end the game first. Under the real payouts a round runs about seventy turns, so if this stops
+    reaching double figures the loop has stopped exercising anything.
+    """
+    session = Session(real_rules, human_seat=1, seed=7)
+    session.hint_particles = 48
+
+    assert _hints_are_legal(session) >= 10
 
 
 def test_asking_when_there_is_nothing_to_decide_answers_rather_than_raising(real_rules):

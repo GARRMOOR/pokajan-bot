@@ -7,7 +7,10 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 271 tests, ~1 min.
+- `.\.venv\Scripts\python -m pytest` — 314 tests, ~55 s.
+- `.\.venv\Scripts\python scripts\capture.py` — watch the game and log what it reads.
+  `--frame <name>` reads a saved capture instead, which is how the pipeline gets exercised
+  without the game running; `--status` reports disk use; `--purge` deletes every kept crop.
 - `.\.venv\Scripts\python -m pokajan.train.evaluate --agent X --baseline Y --seeds 200 --workers 6`
 - `.\.venv\Scripts\python -m pokajan.server.app` — playable web table on :8000.
 - `.\.venv\Scripts\python -m pokajan.server.overlay [--place|--check]` — the overlay.
@@ -16,6 +19,9 @@ wrong and not obvious from reading the code.
   `scripts\check_layout.py` draws every region back onto a frame — the only way to
   verify a fraction, and it now also reports the roster each frame reads;
   `scripts\harvest_digits.py` re-cuts the digit exemplars and
+  `scripts\capture.py` watches the live game and writes `data/games/*.jsonl` — no screenshot
+  ever reaches disk; `--tune` reports why a live read fails without saving anything, `--status`
+  what is on disk, `--purge` clears the crop store, `--frame <path>` replays a saved capture;
   `scripts\harvest_group_labels.py` the group badges. **Both harvesters must be re-run
   and their reads checked back against their own transcriptions when a case is added** —
   the glyph-count check only catches a case with the wrong *number* of digits, and a case
@@ -49,10 +55,21 @@ wrong and not obvious from reading the code.
    artifact and it holds no personal data.
    The **inverse also holds**: derived *text* under `data/captures/` is committed on
    purpose — `digits.yaml` (glyph shapes from the game's typeface),
-   `hololive_groups.yaml` (public agency membership), `payouts_observed.yaml` and
-   `rounds_observed.yaml`. They carry no personal data and they are what lets the
-   reader work on a machine that has no screenshots. Keep them plain text so a bad
-   entry shows up in a diff.
+   `group_labels.yaml` (badge glyphs), `hololive_groups.yaml` (public agency
+   membership), `payouts_observed.yaml` and `rounds_observed.yaml`. They carry no
+   personal data and they are what lets the reader work on a machine that has no
+   screenshots. Keep them plain text so a bad entry shows up in a diff.
+5. **`scripts/capture.py` writes no screenshot, ever.** A frame is grabbed into memory,
+   read, and dropped — there is no moment at which a picture of a live match is a file.
+   Stronger than deleting one afterwards, and the player asked for it: this machine is
+   short of disk. The history is `data/games/*.jsonl` instead, which is why every
+   refusal is written down — anything the reader missed is gone with the frame.
+   The one exception is `data/pending/`: small **crops** of regions whose readers are
+   not built yet, under a byte cap, oldest evicted first, `--purge` to clear.
+   `capture.CROPPABLE` is an **allowlist** and must stay one — a blocklist fails open,
+   and the region that would hurt is `COINS`, whose box deliberately reaches up over
+   the player's name so `digits.split_digits` can find the number band beneath it.
+   Delete the store and the allowlist when those readers land.
 
 ## Architecture that is expensive to reverse
 
@@ -91,6 +108,18 @@ wrong and not obvious from reading the code.
   without the code under test ever running twice. Neither looked wrong. **For any test
   guarding a specific regression, break the code and watch it fail** — cheap, and it
   is the only thing that distinguishes a guard from decoration.
+
+- **A threshold tuned on Steam screenshots does not necessarily transfer to a live grab of
+  the same pixels.** Every capture in `data/tables/` is a Steam JPEG; the watcher grabs the
+  compositor. The coin icon sits inside `COINS["bottom"]` and always did — on the JPEGs it is
+  saturated enough that the pale-ink filter shreds it into 8–16px fragments the height filter
+  drops, so the box *looked* like it excluded the icon. Live, the same icon renders less
+  saturated, survives as two 54–56px "glyphs", and `coins_bottom` refused on **every frame of
+  a real session**. Exclude by **geometry**, which is durable; relying on a colour filter to
+  remove something is a bet on the capture path. Anything calibrated only against
+  `data/tables/` should be re-checked live before it is trusted — `--tune` reports the
+  segmentation as text, which matters because those boxes contain a username and cannot be
+  cropped for inspection.
 
 - **A card read must name an id the engine knows.** `templates.character_from_filename`
   produces the catalogue's keys and they have to be canonical ids, punctuation and all folded
@@ -135,6 +164,8 @@ On the vision side, same rule, three more negatives:
 | Letterboxing a glyph to preserve its aspect | **Worse at every size** 12x18 to 36x36 — mean pairwise 0.31 vs 0.20, tightest real margin 0.15 vs 0.27. Identical padding *correlates*, dragging every pair toward 1 together. Stretch instead. |
 | Matching panel portraits against card art | **1/17.** They are a different rendering, not a crop; hence reading the badges at all. |
 | Reading a badge with `digits.DigitReader` | "Ga" → a **confident 0** at 0.74, runner-up 0.25 behind. A digit alphabet has nothing for a G to lose to. |
+| Gating captures on the table holding still | **2 of 77** consecutive frame pairs looked settled over 45s of live play; worst movement in *every* region exceeded 190/255. Six records in a round where the deck fell 53→20. Something is always moving. Use the deck counter's **value** instead — 1.7 ms, and it is the game's own turn clock. `--tune` is what measured this. |
+| Quantising a change signature before comparing | No tolerance at a bucket boundary, so +1 to every pixel reads as a change. Threshold the difference instead. |
 
 ## The overlay does not depend on M5 or M6
 

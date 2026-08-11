@@ -13,7 +13,7 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-271 tests passing.
+314 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
 themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
@@ -148,6 +148,67 @@ Reading every harvest case back with the finished reader is worth the minute it 
 found one transcribed as `1040` where the screen said `2270`, which had been feeding a `2`
 into the `1` exemplar and a `7` into the `4`. Averaging over several sightings had
 outvoted it, so nothing ever looked wrong.
+
+**A frame is now read whole.** `vision/reader.py` turns one settled frame into whatever it
+supports, and `scripts/capture.py` watches the game and writes that down. On the three clean
+table captures it reads everything there is: deck counter, all four coin totals summing to
+exactly 4000, the roster, the bonus holomem and all seven cards in hand, with no refusals at
+all.
+
+```
+r0  [table]  deck 71  coins 4000  gen1/gen2/gen5/id1  hand 7/7
+r0  [table]  deck 30  coins 4000  gamers/gen4/gen5/myth  hand 7/7
+r0  [reveal]  deck ?  coins 0/4  gen1/gen2/gen5/id1
+```
+
+Three decisions in there are worth more than the code:
+
+**No screenshot is ever written.** A frame is grabbed into memory, read, and dropped. That is
+stronger than deleting one afterwards — there is no moment at which a picture of a live online
+match against real people exists as a file. The history is a JSON Lines log instead, which is
+also why **every refusal is recorded**: anything the reader failed to notice went out of
+existence with the frame, so a hole in the log has to be visible as a hole rather than as
+silence. The one exception is small crops of the regions whose readers are not built yet, from
+an allowlist that excludes the coin boxes because those deliberately overlap the player's name.
+
+**A frame is read only once it has settled** — the same signature twice running. Reading
+mid-animation is how a reader produces a confident wrong answer instead of a refusal, and
+there is a capture that proves it: the reveal screen caught halfway through its zoom counts
+[5, 1, 2, 5] panel members and is saved only by 1 not being a group size. The change signature
+costs 1.1 ms per frame, down from 26 ms once it striped the pixels away before doing any
+arithmetic rather than after.
+
+**A frame whose group panel is covered is still read.** Those are the mid-payout frames, and
+abandoning them would be the worst available choice: a call's meld is the *only* moment
+`scored` is observable, since those cards then leave the table permanently. So the roster
+refuses and the coins are read anyway.
+
+What one frame cannot give is `table` and `scored` themselves, and that is the shape of what
+is left. **And it now watches the real game.** `scripts/capture.py` grabs the monitor, reads each frame
+and writes a line of text — no screenshot ever reaches the disk, which is stronger than
+deleting one afterwards: there is no moment at which a picture of a live online match exists as
+a file. The history lives in `data/games/*.jsonl`, refusals included, because a log with holes
+is far better than one with silent gaps.
+
+Two things it immediately proved wrong, both of them things that looked fine on saved captures:
+
+- **Gating on a settled table does not work.** The idea was that a still table is a safe one,
+  since a mid-animation frame is what produces a confident wrong read. Measured over 45 seconds
+  of live play: **2 of 77 consecutive frame pairs looked settled**, and the worst movement in
+  *every* region exceeded 190 of 255. A round in which the deck fell from 53 to 20 produced six
+  records — one frame in four turns. Something on this table is always moving. The gate is now
+  the **deck counter's value**, which falls by one on every draw and so is the game's own turn
+  clock, at 1.7 ms against 153 ms for a full read.
+- **A threshold tuned on Steam screenshots need not survive a live grab of the same pixels.**
+  The coin icon was inside `COINS["bottom"]` all along; on a JPEG it is saturated enough that
+  the pale-ink filter shreds it into fragments the height filter drops, so the box looked like
+  it excluded the icon. Live, it renders less saturated, survives as two 54–56px "glyphs", and
+  that box refused on **every frame of a real session**. Excluding by geometry is durable;
+  trusting a colour filter to remove something is a bet on the capture path.
+
+Fixing the second improved the saved captures too, which is how it earned its keep: a
+mid-payout frame that could not be totalled before now reads all four seats at **4030** —
+exactly 4000 plus the minting already recorded for that game.
 
 The reader's remaining hard part is now scoped rather than guessed. **Do not try to
 segment an opponent's discard field**: the seats either side lay their discards out as

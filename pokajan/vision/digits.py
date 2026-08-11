@@ -147,11 +147,18 @@ def split_digits(region: np.ndarray) -> list[np.ndarray]:
     if not runs:
         return []
 
-    tallest = max(_ink_height(mask[:, a:b]) for a, b in runs)
+    # Measured against the MEDIAN run height, not the tallest. Every digit in a number shares
+    # a cap height, so the median is a digit's height whenever digits are the majority -- while
+    # the tallest may be an intruder, and an intruder that is tall *raises the bar for the real
+    # digits*. A live frame put two 54-56 pixel fragments of the coin icon in a box whose digits
+    # are 43-45; those survived either way, but one 90-pixel intruder would have suppressed
+    # every genuine digit and turned a wrong read into no read at all.
+    heights = sorted(_ink_height(mask[:, a:b]) for a, b in runs)
+    reference = heights[len(heights) // 2]
     kept: list[tuple[int, int]] = []
     for start, stop in runs:
         height = _ink_height(mask[:, start:stop])
-        if height < MIN_RELATIVE_HEIGHT * tallest:
+        if height < MIN_RELATIVE_HEIGHT * reference:
             continue                                  # a speck, or antialiasing
         if (stop - start) <= MAX_GLYPH_ASPECT * height:
             kept.append((start, stop))
@@ -213,6 +220,59 @@ def ink_bounds(region: np.ndarray) -> tuple[float, float, float, float] | None:
     height, width = mask.shape
     return (float(cols[0]) / width, float(band[0]) / height,
             float(cols[-1] + 1) / width, float(band[1]) / height)
+
+
+def describe(region: np.ndarray, reader: "DigitReader | None" = None) -> str:
+    """Why a number did or did not read, as **text only**.
+
+    Deliberately text and never a picture. The regions that need diagnosing most are the coin
+    boxes, and those reach up over the player's name so that `split_digits` can find the number
+    band beneath it -- so a crop of one is a picture of somebody's username, and
+    `capture.CROPPABLE` refuses to save it. Numbers about the segmentation carry the same
+    diagnostic weight and none of the personal data: band position, glyph count, each glyph's
+    shape, and what each one nearly matched.
+
+    Written for a specific live failure: every frame of a real session refused `coins_bottom`
+    with "found 6 glyphs, more than 5", on a box that reads perfectly on saved screenshots.
+    """
+    mask = ink_mask(region)
+    height, width = mask.shape
+    lines = [f"region {width}x{height}, ink {mask.mean():.1%}"]
+    if not mask.any():
+        return lines[0] + " -- no ink at all"
+
+    ruled = mask & (mask.mean(axis=1) < RULE_FRACTION)[:, None]
+    rules = [band for band in _runs((mask.mean(axis=1) >= RULE_FRACTION))]
+    if rules:
+        lines.append(f"  full-width rules stripped at rows {rules}")
+
+    bands = _runs(ruled.any(axis=1))
+    chosen = _busiest_band(ruled)
+    lines.append(f"  {len(bands)} horizontal band(s): "
+                 + ", ".join(f"rows {a}-{b} (h={b - a}, ink={int(ruled[a:b].sum())})"
+                             for a, b in bands))
+    if chosen is None:
+        return "\n".join(lines + ["  no band chosen"])
+    lines.append(f"  chose rows {chosen[0]}-{chosen[1]} -- tallest, ink as tiebreak")
+
+    inside = ruled[chosen[0]:chosen[1]]
+    runs = [(a, b) for a, b in _runs(inside.any(axis=0)) if b - a >= MIN_GLYPH_WIDTH]
+    tallest = max((_ink_height(inside[:, a:b]) for a, b in runs), default=0)
+    for a, b in runs:
+        tall = _ink_height(inside[:, a:b])
+        kept = tall >= MIN_RELATIVE_HEIGHT * tallest
+        wide = (b - a) > MAX_GLYPH_ASPECT * tall
+        lines.append(f"    cols {a}-{b} w={b - a} h={tall} aspect={(b - a) / max(tall, 1):.2f}"
+                     f"{'' if kept else '  DROPPED: too short'}"
+                     f"{'  will be split: too wide' if kept and wide else ''}")
+
+    glyphs = split_digits(region)
+    lines.append(f"  -> {len(glyphs)} glyph(s) after splitting")
+    if reader is not None and len(reader):
+        number = reader.read(region)
+        lines.append(f"  -> {number.value if number.confident else 'REFUSED'}"
+                     f"  {number.reason}")
+    return "\n".join(lines)
 
 
 def _runs(flags: np.ndarray) -> list[tuple[int, int]]:

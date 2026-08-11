@@ -105,8 +105,37 @@ depends on:
   card in each field, once per turn**, at the end furthest from its seat -- which is
   the un-stacked, unambiguous end.
 
+* **`geometry.CARD_ASPECT` is the aspect of a card in YOUR HAND, and does not
+  transfer to the other seats.** Measured on live crops of one round: the bottom
+  seat's own discards come out at 0.765-0.786 against the 0.717 the hand gives, and
+  the top seat's at roughly 0.87 -- its cards are foreshortened by the table's
+  perspective, being further away. Feeding one aspect to `find_row` for every seat
+  therefore mis-counts: the top seat's five discards segmented as **seven**, and the
+  boundaries drifted enough that the third card was read with the fourth's colour.
+
+  So each seat needs its own measured card aspect. This is the same perspective
+  finding already recorded below for the seats either side, except that it turns out
+  to bite the top seat too, where a row *looks* axis-aligned and segments without
+  complaint. Preliminary -- one round, and the true counts came from looking at the
+  crops -- but the direction is not in doubt.
+
+  It also explains weak identification there. Discard art matched at 0.28-0.65 where
+  the hand manages 0.74-0.78, and a misaligned crop is a sufficient cause: a discard
+  card is 143x187 against the hand's 228x321, so there is less to match and the
+  jitter search has proportionally further to travel.
+
 * **Cards carry their group name** ("Gen1", "ID Gen3", "Myth") and colour is the
-  card frame, not the artwork. So identification decomposes cleanly: character from
+  card frame, not the artwork.
+
+  Live crops confirm this is worth reading rather than treating as decoration: a
+  discarded card shows its badge plainly ("Gen5", "holoX", "ID Gen1"), which is a
+  free cross-check of every discard against the roster that was read from the panel.
+  A discard whose group is not one of the four dealt is a misread, and that check
+  costs nothing because `group_labels` already classifies those badges.
+
+* **The top seat's cards are drawn upside down**, not merely small -- they face that
+  seat. `find_row(..., rotate=180)` is required there, and without it every template
+  match is against an inverted portrait. So identification decomposes cleanly: character from
   an art template, colour from a flat frame sample, group as a free cross-check.
   One colourless template per character covers all three colours.
 
