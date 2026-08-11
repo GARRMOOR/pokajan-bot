@@ -54,3 +54,34 @@
 #
 # The same screen also confirms the coin-floor ending in words:
 # "Ahimsa's score hit 0. Ending the game."
+
+- source: data/games/20260810T230853.jsonl        # records 55-57, read live, no screenshot
+  caller: left seat
+  hand_type: triple
+  group_size: null
+  monochrome: true
+  bonus_copies: 0
+  claimed: false
+  caller_gained: 840
+  payers: [-280, -280, -160]
+  payer_final: 0
+  minted: 120
+  ended_game: true
+  note: >
+    The first payout observed by the reader rather than transcribed by eye, and the arithmetic
+    closes exactly on four separate rules at once.
+
+    Coins before: left 1000, right 2230, top 610, bottom unread. Coins after: left 1840, right
+    1950, top 330, bottom 0, totalling 4120. So the caller gained 840 -- the monochrome-triple
+    cell -- and the other three split it evenly at 280 each, confirming payer.otherwise =
+    split_others for a self-drawn hand.
+
+    Bottom therefore held 1000+2230+610 subtracted from 4000, which is 160, and could not pay
+    280. It paid 160 and stopped at zero while the caller still received the full 840, so the
+    shortfall of exactly 120 was minted -- and 4120 - 4000 = 120 measured independently from
+    the four totals. That is end_conditions.floor_is_asymmetric and
+    caller_gains_full_amount_on_payer_bankruptcy confirmed together, with the mint equal to the
+    shortfall to the coin rather than approximately.
+
+    Also the first live confirmation that a seat reaching zero ends the round: the log stops
+    three records later.

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from pokajan.vision.geometry import (
     CARD_ASPECT,
@@ -39,6 +40,11 @@ pytestmark = pytest.mark.invariant
 FELT = (34, 139, 34)
 CARD_H = 160
 CARD_W = int(round(CARD_H * CARD_ASPECT))
+
+
+def CARD_W_AT(aspect: float) -> int:
+    """Card width at a given on-screen aspect, the height being fixed."""
+    return int(round(CARD_H * aspect))
 
 
 def art(seed: int, height: int, width: int) -> np.ndarray:
@@ -66,20 +72,120 @@ def card(seed: int, colour: str = "pink", *, height: int = CARD_H,
     return made
 
 
-def row_of(cards: list[np.ndarray], pad: int = 24) -> np.ndarray:
-    """Lay cards out on felt, with a margin, the way the game does."""
+def row_of(cards: list[np.ndarray], pad: int = 24, gap_after: int | None = None,
+           gap: float = 1.0) -> np.ndarray:
+    """Lay cards out on felt, with a margin, the way the game does.
+
+    `gap_after` leaves a stretch of bare felt `gap` cards wide after that index, which is what
+    the game does when a seat holds its drawn card apart or a card is in flight.
+    """
     height = cards[0].shape[0]
-    width = sum(c.shape[1] for c in cards)
+    card_w = cards[0].shape[1]
+    hole = int(round(card_w * gap)) if gap_after is not None else 0
+    width = sum(c.shape[1] for c in cards) + hole
     region = np.zeros((height + 2 * pad, width + 2 * pad, 3), dtype=np.uint8)
     region[:, :] = FELT
     x = pad
-    for one in cards:
+    for index, one in enumerate(cards):
         region[pad:pad + height, x:x + one.shape[1]] = one
         x += one.shape[1]
+        if gap_after is not None and index == gap_after:
+            x += hole
     return region
 
 
 # ------------------------------------------------------------ segmentation ---
+
+@pytest.mark.parametrize("before,after", [(5, 1), (4, 2), (1, 1), (6, 1)])
+def test_a_row_with_a_hole_in_it_is_not_one_row(before, after):
+    """A hand is not always contiguous, and measuring across the hole ruins every boundary.
+
+    Reported from a live session: the same hand positions refused on 72 of 77 frames while
+    their neighbours read perfectly. Positional and persistent, and nothing to do with the art
+    — the span from first card to last included a card-wide stretch of felt, so the count came
+    out too large and every slice landed a fraction of a card to the left of where it should.
+    Six of six cards read once each stretch is sliced on its own.
+    """
+    cards = [card(i, "blue") for i in range(before + after)]
+
+    row = find_row(row_of(cards, gap_after=before - 1))
+
+    assert row is not None
+    assert len(row.cards) == before + after
+    assert row.runs == (before, after)
+    assert row.detached == after
+
+
+def squashed_row(aspect: float, count: int) -> np.ndarray:
+    """A row as a further-away seat draws it: same height, foreshortened width."""
+    cards = [
+        np.asarray(Image.fromarray(card(i, "pink")).resize(
+            (CARD_W_AT(aspect), CARD_H), Image.LANCZOS))
+        for i in range(count)
+    ]
+    return row_of(cards)
+
+
+@pytest.mark.parametrize("aspect", [CARD_ASPECT, 0.765, 0.931])
+@pytest.mark.parametrize("count", [1, 3, 5, 7])
+def test_each_region_counts_correctly_given_its_own_aspect(aspect, count):
+    """`CARD_ASPECT` is your own hand's; the rest of the table is further from the camera.
+
+    Measured on live crops of lone cards: your own discards 0.765, the top seat's 0.931, against
+    the hand's 0.717. Given the right one, the count is exact at every length.
+    """
+    row = find_row(squashed_row(aspect, count), aspect=aspect)
+
+    assert row is not None
+    assert len(row.cards) == count
+
+
+def test_the_hands_aspect_miscounts_the_top_seat():
+    """Which is the failure that made this worth fixing, and it is not symmetric.
+
+    The count is `span / (height * aspect)` rounded, so a small aspect error rounds away and a
+    large one does not. The bottom seat is 0.765 against 0.717 -- under 7% -- and five cards
+    still come back as five, which is why its discards never looked broken. The top seat is
+    0.931, a 30% error, and five come back as **seven**; the boundaries then drift far enough
+    that one card is read with its neighbour's colour. Both of those are live observations.
+    """
+    top = squashed_row(0.931, 5)
+    bottom = squashed_row(0.765, 5)
+
+    # Not pinned to the live figure of seven: the true count lands near a rounding boundary, so
+    # the wrong answer is six here and was seven there. What matters is that it is not five.
+    assert len(find_row(top).cards) != 5
+    assert len(find_row(top, aspect=0.931).cards) == 5
+    assert len(find_row(bottom).cards) == 5, "a sub-7% error rounds away, as it does live"
+
+
+def test_a_gutter_is_not_a_hole():
+    """The distinction the whole change rests on, and the two are nowhere near each other.
+
+    Gutter detection is what this module replaced, because a gutter is barely felt at all — on
+    a real frame the gaps between cards are about a tenth felt and a highlight glow erases one
+    completely. A real hole is a whole missing card. Measured live: gutters about 0.05 of a
+    card, the hole 1.0. So an ordinary row must stay one run no matter how it is padded.
+    """
+    cards = [card(i, "orange") for i in range(7)]
+
+    assert find_row(row_of(cards)).runs == (7,)
+    assert find_row(row_of(cards, gap_after=3, gap=0.2)).runs == (7,)
+
+
+def test_a_hole_does_not_change_what_the_cards_are():
+    """The point of the fix: the cards either side of a hole must read exactly as they would
+    without it, since nothing about them has changed."""
+    cards = [card(i, "pink") for i in range(5)]
+    catalogue = TemplateSet({f"holomem_{i}": [prepare(card(i, "pink"))] for i in range(5)})
+
+    whole = find_row(row_of(cards))
+    holed = find_row(row_of(cards, gap_after=2))
+
+    assert [catalogue.identify(c).character for c in whole.cards] \
+        == [catalogue.identify(c).character for c in holed.cards]
+
+
 
 @pytest.mark.parametrize("count", [1, 2, 4, 5, 7, 8])
 def test_a_row_is_split_by_the_card_shape_not_by_the_gaps(count):

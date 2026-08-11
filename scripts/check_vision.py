@@ -58,6 +58,23 @@ CASES = [
         "20260809073329_1.jpg", layout.BONUS_CARD,
         [("gawr_gura", None)],
     ),
+    (
+        # The TOP seat's discards, which need two corrections your own row does not.
+        # Their cards are drawn upside down, and they sit further up the table so they are
+        # foreshortened -- 0.931 against the hand's 0.717. At the hand's aspect this row
+        # segmented five cards as seven and the boundaries drifted enough to read one card
+        # with its neighbour's colour. Listed in that seat's own left-to-right order, which is
+        # the reverse of screen order once the row is turned upright.
+        "20260809073329_1.jpg", layout.DISCARDS["top"],
+        [("tsunomaki_watame", "pink"), ("tsunomaki_watame", "blue"),
+         ("gawr_gura", "blue"), ("omaru_polka", "pink")],
+        {"aspect": layout.DISCARD_ASPECT["top"], "rotate": 180},
+    ),
+    (
+        "20260809073119_1.jpg", layout.DISCARDS["top"],
+        [("tsunomaki_watame", "pink"), ("tsunomaki_watame", "blue"), ("gawr_gura", "blue")],
+        {"aspect": layout.DISCARD_ASPECT["top"], "rotate": 180},
+    ),
 ]
 
 
@@ -115,7 +132,9 @@ def main() -> int:
     _report_catalogue(templates)
 
     total = named = coloured = refused = 0
-    for filename, box, expected in CASES:
+    for case in CASES:
+        filename, box, expected = case[:3]
+        options = case[3] if len(case) > 3 else {}
         path = TABLES / filename
         if not path.exists():
             print(f"skipping {filename}: not on this machine")
@@ -130,7 +149,7 @@ def main() -> int:
             continue
         region = area.crop(frame, box)
 
-        row = find_row(region)
+        row = find_row(region, **options)
         found = 0 if row is None else len(row.cards)
         status = "ok" if found == len(expected) else f"WRONG ({len(expected)} expected)"
         print(f"{filename} {box}\n  segmented {found} cards -- {status}")

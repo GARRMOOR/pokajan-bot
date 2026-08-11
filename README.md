@@ -13,14 +13,14 @@ reading the real game's screen so the bot can advise during live play.
 an AEC environment, the confirmed payout table, a web table you can sit down and play
 *with a hint panel*, an overlay window pinned over the screen, a two-level belief,
 three agents, a determinized-search implementation, and an evaluation harness, with
-314 tests passing.
+333 tests passing.
 
 What remains before this is useful against the real game is recognition, and the cards
 themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
 every region taken from `vision/layout.py` rather than from pixel coordinates:
 
 ```
-holomem 11/12   colour 12/12   refused 1/12        ~10 ms/card
+holomem 18/19   colour 19/19   refused 1/19        ~10 ms/card
 ```
 
 Zero misidentified, which is the number that matters — the one refusal is a discard

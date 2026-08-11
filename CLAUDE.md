@@ -7,7 +7,7 @@ wrong and not obvious from reading the code.
 ## Environment
 
 - **Python 3.12 in `.venv`.** The system `python` is 3.14 and has no torch wheels.
-- `.\.venv\Scripts\python -m pytest` — 314 tests, ~55 s.
+- `.\.venv\Scripts\python -m pytest` — 333 tests, ~30 s.
 - `.\.venv\Scripts\python scripts\capture.py` — watch the game and log what it reads.
   `--frame <name>` reads a saved capture instead, which is how the pipeline gets exercised
   without the game running; `--status` reports disk use; `--purge` deletes every kept crop.
@@ -161,6 +161,8 @@ On the vision side, same rule, three more negatives:
 |---|---|
 | Matching a group badge as one picture | "2ID" vs "3ID" **0.14 margin**, under the 0.15 threshold — and both groups have three members, so the member count cannot break the tie. Split the primary from the subscript: 0.26. |
 | Raising the badge canvas 28px → 96px to fix that | **No effect** (0.136 → 0.121). Resolution does not change a ratio of shared to distinguishing ink. |
+| Rectifying a card's aspect before matching | **No effect at all** — `templates.query_variants` already resizes every query to fixed dimensions, so the input aspect is discarded before matching. Aspect matters for *segmentation*, never for the match. |
+| Expecting `FRAME_REFERENCES` to need live recalibration | **15/15 live cards correct**, distances 10–33 against a 120 limit. The Steam-JPEG-vs-live-grab problem that broke the coin boxes does *not* extend to colour. |
 | Letterboxing a glyph to preserve its aspect | **Worse at every size** 12x18 to 36x36 — mean pairwise 0.31 vs 0.20, tightest real margin 0.15 vs 0.27. Identical padding *correlates*, dragging every pair toward 1 together. Stretch instead. |
 | Matching panel portraits against card art | **1/17.** They are a different rendering, not a crop; hence reading the badges at all. |
 | Reading a badge with `digits.DigitReader` | "Ga" → a **confident 0** at 0.74, runner-up 0.25 behind. A digit alphabet has nothing for a G to lose to. |

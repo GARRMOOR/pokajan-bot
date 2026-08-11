@@ -106,23 +106,51 @@ depends on:
   the un-stacked, unambiguous end.
 
 * **`geometry.CARD_ASPECT` is the aspect of a card in YOUR HAND, and does not
-  transfer to the other seats.** Measured on live crops of one round: the bottom
-  seat's own discards come out at 0.765-0.786 against the 0.717 the hand gives, and
-  the top seat's at roughly 0.87 -- its cards are foreshortened by the table's
-  perspective, being further away. Feeding one aspect to `find_row` for every seat
-  therefore mis-counts: the top seat's five discards segmented as **seven**, and the
-  boundaries drifted enough that the third card was read with the fourth's colour.
+  transfer to the other seats.** Your hand sits closest to the camera; everything
+  further up the table is foreshortened, so the same card is drawn shorter without
+  being drawn narrower. Measured on live crops of lone cards: your own discards come
+  out at 0.765 against the hand's 0.717, and the top seat's at 0.931.
 
-  So each seat needs its own measured card aspect. This is the same perspective
-  finding already recorded below for the seats either side, except that it turns out
-  to bite the top seat too, where a row *looks* axis-aligned and segments without
-  complaint. Preliminary -- one round, and the true counts came from looking at the
-  crops -- but the direction is not in doubt.
+  This mis-*counts* rather than merely mis-frames, because `find_row` derives the count
+  from the aspect. The error is not symmetric, and that is why it hid for so long: the
+  count is a rounded ratio, so the bottom seat's sub-7% error rounds away and its
+  discards never looked broken, while the top seat's 30% error turned five cards into
+  **seven** and drifted the boundaries far enough to read one card with its
+  neighbour's colour. Fixed by `layout.DISCARD_ASPECT`, which `find_row` takes as a
+  parameter. Card reading went from 11/12 to **18/19** once the top seat could be read
+  at all.
 
-  It also explains weak identification there. Discard art matched at 0.28-0.65 where
-  the hand manages 0.74-0.78, and a misaligned crop is a sufficient cause: a discard
-  card is 143x187 against the hand's 228x321, so there is less to match and the
-  jitter search has proportionally further to travel.
+  The two side seats have no entry on purpose: their discards are diagonal staircases
+  rather than rows, so no single aspect describes them and `reader.read_discards`
+  raises rather than returning plausible nonsense.
+
+* **The top seat's cards are drawn upside down, and turning them upright reverses the
+  row.** That seat's leftmost card is on the right of the screen, so slices come out in
+  screen order and have to be flipped to be in *that seat's* order.
+
+  Worth more care than it sounds, because discard order is information: obs.py encodes
+  each opponent's last three discards, and the newest card sits at the end furthest
+  from its seat. A reversed list puts the oldest card where the newest belongs and is
+  wrong in precisely the way that looks right. Caught by reading a row as
+  watame, watame, gura, polka off the screen and getting polka, gura, watame, watame
+  back.
+
+* **Identification confidence depends on the holomem, not just the size of the card.**
+  Measured on live crops: the top seat's `shirakami_fubuki` scores 0.70 at 122x131,
+  while the bottom seat's `hakui_koyori` tops out at 0.54 over an exhaustive crop
+  sweep at 158x187 -- bigger, and worse. Pale pink art on a pale frame gives
+  cross-correlation less to grip. So the 0.45 floor in templates.py is not a
+  size threshold and must not be "fixed" by scaling it with the crop; the margin is
+  what carries the decision, and on that card the margin was healthy at 0.28 once the
+  framing was right.
+
+  Two things that sound like the cause and are **not**, both checked: the query's
+  aspect is already normalised away by `templates.query_variants`, which resizes every
+  card to fixed dimensions before matching, so rectifying beforehand changes the score
+  by nothing at all. And `FRAME_REFERENCES` transfers to live grabs unchanged --
+  15 of 15 live cards classified correctly at distances of 10 to 33 against a limit of
+  120 -- so the Steam-JPEG-versus-live-grab problem that broke the coin boxes does not
+  extend to colour.
 
 * **Cards carry their group name** ("Gen1", "ID Gen3", "Myth") and colour is the
   card frame, not the artwork.
@@ -237,6 +265,27 @@ depends on:
   rather than needing the portrait set, and it never has to be inferred from a
   payout. It also carries a sparkle effect that follows it into your hand, which is
   a second, redundant read on the same fact.
+
+* **A hand is not always a contiguous row, and this cost more than it should have.**
+  A seat holds its drawn card detached, and a card leaving the hand leaves a hole
+  until the row closes up. `geometry.find_row` measured from the first card to the
+  last and divided by the card width, so a card-wide stretch of felt inflated the
+  count and shifted every boundary -- slices landed on felt and refused. In one live
+  session the same hand positions refused on **72 of 77 frames** while their
+  neighbours read perfectly: positional, persistent, and nothing whatever to do with
+  the art, which is where the search started. Each contiguous stretch is now sliced on
+  its own and both diagnosable crops went from four refusals to **6 of 6 cards named**.
+
+  A real hole and a gutter are nowhere near each other, which is what makes this safe
+  next to the "do not split on felt" finding above: measured live, gutters run about
+  0.05 of a card and a hole is 1.0. Nothing observed lands between.
+
+  What the hole *means* is not settled. One crop shows five cards, a gap, then a lone
+  card of a group that does not sort beside its neighbours -- a drawn card, plainly.
+  Another shows four, a gap, then two, split exactly at a group boundary, which that
+  story does not explain. `CardRow.detached` therefore reports structure only; reading
+  it as "this seat has drawn" would turn an animation frame into a wrong turn
+  attribution.
 
 * **A seat's hand size is directly visible.** Card backs sit in one tight row, and
   a seat that has drawn and not yet discarded holds the drawn card **detached** from

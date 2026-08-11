@@ -34,6 +34,18 @@ FELT_MARGIN = 30
 # pull the next card into it. Two of four cards then fell under the match threshold.
 SOLID_FRACTION = 0.5
 
+# A stretch of felt at least this wide, as a fraction of a card, splits the row in two rather
+# than being treated as a gutter between neighbours.
+#
+# The two are nowhere near each other in size, which is what makes this safe. A gutter is a few
+# pixels; a real gap is a whole missing card, so on a live 1631-pixel hand crop the gutters
+# measure about 0.05 of a card and the gap measures 1.0. Nothing observed lands between.
+#
+# This does not contradict the "do not split on felt" finding in this module's docstring -- it
+# relies on it. Gutter detection fails because a gutter is barely felt at all; that is precisely
+# why anything a third of a card wide cannot be one.
+MIN_GAP = 0.35
+
 # Frame colours, measured from real frames rather than guessed -- the mean of the most
 # saturated fifth of each card's border ring, across several cards per colour:
 #
@@ -59,6 +71,26 @@ class CardRow:
     card_width: int
     card_height: int
     origin: tuple[int, int]      # (x, y) of the row within the region searched
+    runs: tuple[int, ...] = ()   # how many cards in each contiguous stretch
+
+    @property
+    def detached(self) -> int:
+        """How many cards sit apart from the first stretch.
+
+        **Structure, not meaning.** The obvious reading is the mahjong-style drawn card: a
+        seat that has drawn and not yet discarded holds it apart, which would make this the
+        visible form of hand size 8 and the one "this seat owes a discard" signal that survives
+        a single frame, unlike the turn gate, which flashes.
+
+        That reading is not yet earned, and two live crops are why. One shows five cards, a
+        gap, then a single card of a group that does not sort next to its neighbours -- a drawn
+        card, plainly. The other shows four, a gap, then two, split exactly at a group boundary,
+        which the drawn-card story does not explain; it could be a sorted hand mid-animation
+        with a card in flight, or the game spacing groups apart. Until a capture separates
+        those, treat this as "the row is not contiguous" and nothing more. Building
+        "seat has drawn" on it would turn an animation frame into a wrong turn attribution.
+        """
+        return sum(self.runs[1:]) if len(self.runs) > 1 else 0
 
 
 def is_felt(pixels: np.ndarray) -> np.ndarray:
@@ -71,6 +103,7 @@ def is_felt(pixels: np.ndarray) -> np.ndarray:
 def find_row(
     region: np.ndarray,
     *,
+    aspect: float = CARD_ASPECT,
     expected: int | None = None,
     vertical: bool = False,
     rotate: int = 0,
@@ -87,11 +120,23 @@ def find_row(
     aspect of 0.42, which is not obviously wrong to anything downstream -- it is just a
     crop that never matches anything. `rotate` then turns the cards upright, in
     multiples of 90 degrees anticlockwise, so the template matcher sees what it expects.
+
+    `aspect` is **the aspect of a card in this region of the table, which is not the same
+    everywhere.** `CARD_ASPECT` is measured from the art files and holds for your own hand,
+    which sits closest to the camera; everything further up the table is foreshortened by the
+    perspective. Measured on live crops of lone cards: your own discards come out at 0.765
+    against the hand's 0.717, and the top seat's at 0.931.
+
+    Getting this wrong mis-counts rather than merely mis-frames, because the count is derived
+    from it: the top seat's five discards came back as **seven** at the hand's aspect, and the
+    boundaries then drifted far enough that one card was read with its neighbour's colour. At
+    0.931 the same row gives five. Callers should pass `layout.DISCARD_ASPECT[seat]`.
     """
     if vertical:
         # Transposing costs nothing and keeps one implementation of the arithmetic.
         # A vertical column of cards is a horizontal row of cards, sideways.
-        found = find_row(region.swapaxes(0, 1), expected=expected, rotate=0)
+        found = find_row(region.swapaxes(0, 1), aspect=aspect, expected=expected,
+                         rotate=0)
         if found is None:
             return None
         return CardRow(
@@ -99,6 +144,7 @@ def find_row(
             card_width=found.card_height,
             card_height=found.card_width,
             origin=(found.origin[1], found.origin[0]),
+            runs=found.runs,
         )
 
     solid = ~is_felt(region)
@@ -111,28 +157,76 @@ def find_row(
         return None
 
     y0, y1 = int(rows[0]), int(rows[-1]) + 1
-    x0, x1 = int(cols[0]), int(cols[-1]) + 1
     height = y1 - y0
-    width = height * CARD_ASPECT
+    width = height * aspect
     if width < 1:
         return None
 
-    count = max(1, round((x1 - x0) / width))
-    if expected is not None and count != expected:
+    # Slice each contiguous stretch of cards separately rather than treating the whole span as
+    # one row. A hand is not always contiguous: a seat that has drawn holds the drawn card
+    # detached, and a card being played leaves a hole until the row closes up. Measuring across
+    # the hole made the count too large and shifted every boundary, so slices landed on felt --
+    # which is why one live session refused the same hand positions on 72 of 77 frames while
+    # its neighbours read perfectly. Positional, persistent, and nothing to do with the art.
+    stretches = _runs(by_col > SOLID_FRACTION * by_col.max(), min_gap=max(1, round(MIN_GAP * width)))
+
+    cards: list[np.ndarray] = []
+    counts: list[int] = []
+    for x0, x1 in stretches:
+        count = max(1, round((x1 - x0) / width))
+        step = (x1 - x0) / count
+        for index in range(count):
+            left = int(round(x0 + index * step))
+            right = int(round(x0 + (index + 1) * step))
+            cards.append(_rotate(region[y0:y1, left:right], rotate))
+        counts.append(count)
+
+    if not cards:
+        return None
+    if expected is not None and len(cards) != expected:
         return None
 
-    step = (x1 - x0) / count
-    cards = [
-        _rotate(region[y0:y1, int(round(x0 + i * step)):int(round(x0 + (i + 1) * step))],
-                rotate)
-        for i in range(count)
-    ]
+    if (rotate // 90) % 4 == 2:
+        # Turning a card upright by 180 degrees also reverses the row: the top seat's leftmost
+        # card is on the right of the screen. Slices come out in screen order, so they have to
+        # be flipped to be in *that seat's* order.
+        #
+        # Not cosmetic. Discard order is information -- obs.py encodes each opponent's last
+        # three, and the newest card sits at the end furthest from its seat -- so a reversed
+        # list would put the oldest card where the newest belongs and be wrong in exactly the
+        # way that looks right. Verified against a capture: the row reads watame, watame, gura,
+        # polka upright, and came back polka, gura, watame, watame.
+        cards.reverse()
+        counts.reverse()
+
+    span = stretches[0][1] - stretches[0][0]
     return CardRow(
         cards=cards,
-        card_width=int(round(step)),
+        card_width=int(round(span / counts[0])),
         card_height=height,
-        origin=(x0, y0),
+        origin=(stretches[0][0], y0),
+        runs=tuple(counts),
     )
+
+
+def _runs(solid: np.ndarray, *, min_gap: int) -> list[tuple[int, int]]:
+    """Stretches of True, merging any False gap narrower than `min_gap`."""
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, on in enumerate(list(solid) + [False]):
+        if on and start is None:
+            start = index
+        elif not on and start is not None:
+            spans.append((start, index))
+            start = None
+
+    merged: list[tuple[int, int]] = []
+    for span in spans:
+        if merged and span[0] - merged[-1][1] < min_gap:
+            merged[-1] = (merged[-1][0], span[1])
+        else:
+            merged.append(span)
+    return merged
 
 
 def _rotate(card: np.ndarray, degrees: int) -> np.ndarray:

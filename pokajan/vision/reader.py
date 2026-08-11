@@ -189,7 +189,38 @@ class TableReader:
                 refusals[f"coins_{seat}"] = number.reason
         return found
 
+    def read_discards(self, frame: np.ndarray, area: layout.PlayArea,
+                      seat: str) -> tuple[Card, ...]:
+        """The cards visible in one seat's discard field, newest last.
+
+        Only the two axis-aligned seats. The seats either side lay their discards out as
+        sheared diagonal staircases, so `find_row` does not describe them and pointing it at
+        them returns plausible nonsense rather than nothing -- see this package's `__init__`.
+
+        Note what this is *not*: `table`. Older discards slide under the near end of the pile as
+        it grows and become unreadable, so what is visible here is the recent tail, not the
+        history. Accumulating that history is the caller's job.
+        """
+        if seat not in layout.DISCARD_ASPECT:
+            raise KeyError(
+                f"{seat!r} lays its discards out as a diagonal staircase, not a row -- "
+                f"find_row does not describe it"
+            )
+        row = find_row(area.crop(frame, layout.DISCARDS[seat]),
+                       aspect=layout.DISCARD_ASPECT[seat],
+                       rotate=180 if seat == "top" else 0)
+        if row is None:
+            return ()
+        found: list[Card] = []
+        for card in row.cards:
+            match = self.templates.identify(card)
+            colour, _ = classify_colour(frame_colour(card))
+            found.append(Card(match.character, colour, match.score, match.margin))
+        return tuple(found)
+
     def _hand(self, frame, area, refusals) -> tuple[Card, ...]:
+        # Your own hand is closest to the camera, so this is the one region CARD_ASPECT was
+        # measured for and the only one that needs no correction.
         row = find_row(area.crop(frame, layout.HAND))
         if row is None:
             refusals["hand"] = "no row of cards in the hand region"

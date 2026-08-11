@@ -210,6 +210,25 @@ DISCARDS = {
     "right": Box(0.740, 0.200, 0.870, 0.680),
 }
 
+# How wide a card is relative to its height *in each region*, which is not one number.
+#
+# `geometry.CARD_ASPECT` is 0.717, measured from the art files, and it holds for your own hand
+# because that sits closest to the camera. Everything further up the table is foreshortened, so
+# the same card is drawn shorter without being drawn narrower. Measured on live crops of lone
+# cards: your own discards 0.765, the top seat's 0.931.
+#
+# This is not cosmetic, because `find_row` derives the *count* from it. At the hand's aspect the
+# top seat's five discards came back as seven and the boundaries drifted enough to read one card
+# with its neighbour's colour; at 0.931 the same row gives five.
+#
+# The two side seats have no entry on purpose. Their discards are diagonal staircases rather
+# than rows, so a single aspect does not describe them and `find_row` should not be pointed at
+# them at all -- see pokajan/vision/__init__.py.
+DISCARD_ASPECT = {
+    "bottom": 0.765,
+    "top": 0.931,
+}
+
 # Scalars. Each still catches the player's name on the line above and the underline
 # below, which `digits.split_digits` is built to cope with -- but each box now starts to
 # the RIGHT of the coin icon, and that is load-bearing rather than tidy.
