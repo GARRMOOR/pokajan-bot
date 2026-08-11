@@ -184,3 +184,154 @@ def test_acting_out_of_turn_is_refused(real_rules):
     play_out(session)
     with pytest.raises(ValueError, match="not your turn"):
         session.act(0)
+
+
+# ------------------------------------------------------------------- hints ---
+#
+# The hint panel and the M8 overlay are the same code path, so what is guarded here
+# is the wiring rather than the advice: that a hint is always a move the human could
+# actually make, and that the belief behind it is fed by *watching*, not by being
+# asked. The second one is the easy regression — moving observe() inside hint() for
+# speed would leave the advisor inferring from gaps, and nothing would look broken.
+
+def advance(session: Session, turns: int) -> None:
+    """Take `turns` first-legal actions, or stop early if the game ends."""
+    for _ in range(turns):
+        payload = session.payload()
+        if payload["state"]["finished"] or payload["decision"] is None:
+            return
+        session.act(payload["decision"]["legal_mask"].index(True))
+
+
+def _hints_are_legal(session, turns: int = 30) -> int:
+    """Ask for a hint at every human decision and check it is playable. Returns how many."""
+    asked = 0
+    for _ in range(turns):
+        payload = session.payload()
+        if payload["state"]["finished"] or payload["decision"] is None:
+            break
+        reply = session.hint()
+        assert reply["hint"] is not None
+        assert reply["hint"]["seat"] == 1
+        assert payload["decision"]["legal_mask"][reply["hint"]["action"]]
+        assert reply["ms"] >= 0.0
+        asked += 1
+        session.act(payload["decision"]["legal_mask"].index(True))
+    return asked
+
+
+@given(cfg=rules_configs(), seed=st.integers(0, 5_000))
+@SETTINGS
+def test_a_hint_is_always_a_move_the_human_could_make(cfg, seed):
+    """Under *any* config: a hint the human cannot play is worse than no hint at all.
+
+    Nothing here asserts that the human ever gets a turn, and that omission is deliberate
+    rather than lax. It used to assert exactly that, and Hypothesis eventually found the config
+    which makes it wrong -- group payouts scaling to 4900 against a 1000-coin start, so the
+    first call bankrupts somebody and the game ends before seat 1 has decided once. Nothing was
+    broken; the guard was.
+
+    The guard existed for a good reason, since a loop that never runs asserts nothing. It moved
+    to `test_hints_are_asked_for_repeatedly_under_the_real_rules`, where the payouts are the
+    ones the game actually uses and a turn count can be pinned without lying.
+    """
+    session = Session(Rules.from_dict(cfg), human_seat=1, seed=seed)
+    session.hint_particles = 48
+
+    _hints_are_legal(session)
+
+
+def test_hints_are_asked_for_repeatedly_under_the_real_rules(real_rules):
+    """The anti-vacuity half, somewhere a turn count can honestly be asserted.
+
+    The property test above cannot promise the human ever acts, because a *generated* config may
+    end the game first. Under the real payouts a round runs about seventy turns, so if this stops
+    reaching double figures the loop has stopped exercising anything.
+    """
+    session = Session(real_rules, human_seat=1, seed=7)
+    session.hint_particles = 48
+
+    assert _hints_are_legal(session) >= 10
+
+
+def test_asking_when_there_is_nothing_to_decide_answers_rather_than_raising(real_rules):
+    """The client polls this, so an exception here would surface as a dead panel."""
+    session = Session(real_rules, human_seat=0, seed=3)
+    play_out(session)
+
+    reply = session.hint()
+    assert reply["hint"] is None
+    assert reply["reason"]
+
+
+def test_the_belief_is_fed_by_watching_not_by_being_asked(real_rules):
+    """No hint is ever requested here, and the belief must still know about passes.
+
+    A pass is only visible as a difference between two consecutive views: a card
+    that arrived on the table and stayed there is one every other seat declined or
+    was ineligible for. So `pass_events` can only be non-empty if the advisor saw
+    the quiet positions too, which makes this the direct test of that wiring - and
+    it is the signal humans do not track, so it is most of the belief's edge.
+
+    Note it is inferred from the table, not read off the transcript's
+    `claim_passed` event. That event only fires when a seat that *could* claim
+    declined, which greedy bots never do; the inference also counts ineligibility,
+    which is why it sees far more.
+    """
+    session = Session(real_rules, human_seat=0, seed=11)
+    advance(session, 12)
+
+    belief = session.advisor.agent.belief
+    assert belief is not None, "the advisor was never fed a state"
+    assert belief.pass_events, (
+        "the advisor saw no unclaimed discards, so it was not observing every state"
+    )
+    # And it is current rather than merely initialised: what it counts as seen is
+    # exactly the public record of the position now on screen.
+    state = session.engine.public_state(0)
+    expected = [
+        state.hand[s] + state.table[s] + state.scored[s] for s in range(len(state.hand))
+    ]
+    assert list(belief.seen) == expected
+
+
+def test_re_advising_the_same_position_does_not_shift_the_belief(real_rules):
+    """Evidence must not compound when the same view is folded in twice.
+
+    `hint()` caches one answer per position, so the cache is cleared between calls
+    here on purpose - otherwise this would pass without the underlying path ever
+    running again, which is the vacuous-test trap this suite has fallen into before.
+    What is being checked is Belief.observe's idempotence, not the cache's.
+    """
+    session = Session(real_rules, human_seat=0, seed=11)
+    advance(session, 12)
+    belief = session.advisor.agent.belief
+
+    session.hint()
+    seen, passes = list(belief.seen), len(belief.pass_events)
+    for _ in range(3):
+        session._hint_cache = None
+        session.hint()
+
+    assert list(belief.seen) == seen
+    assert len(belief.pass_events) == passes
+
+
+def test_changing_the_sample_count_keeps_the_accumulated_belief(real_rules):
+    """Why hint() retunes the agent instead of building a new one.
+
+    Rebuilding would be the obvious way to change particle counts and would throw
+    away every pass observed so far, mid-game, for a UI setting.
+    """
+    session = Session(real_rules, human_seat=0, seed=11)
+    advance(session, 12)
+    before = session.advisor.agent.belief
+    passes = len(before.pass_events)
+    assert passes > 0
+
+    session.hint_particles = 256
+    session.hint()
+
+    assert session.advisor.agent.belief is before
+    assert len(before.pass_events) == passes
+    assert session.advisor.agent.particles == 256

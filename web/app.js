@@ -19,6 +19,13 @@ let SPEED = 650;       // ms between events; 0 reveals everything at once
 let prevHand = null;   // to highlight cards that just arrived
 let freshSlots = [];
 
+// The bot's advice is fetched separately from the state, so it has to be discarded
+// the moment the position moves on. Stale advice is worse than none: it looks
+// current and reads authoritatively.
+let HINT = null;
+let HINT_BUSY = false;
+let HINT_AUTO = false;
+
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- helpers ---
@@ -45,10 +52,10 @@ function expand(counts) {
   return out;
 }
 
-function cardEl(slot, { mini = false, onClick = null, fresh = false } = {}) {
+function cardEl(slot, { mini = false, onClick = null, fresh = false, advised = false } = {}) {
   const el = document.createElement('div');
   el.className = `card ${colorName(slot)}${mini ? ' mini' : ''}` +
-    `${isBonus(slot) ? ' bonus' : ''}${fresh ? ' fresh' : ''}`;
+    `${isBonus(slot) ? ' bonus' : ''}${fresh ? ' fresh' : ''}${advised ? ' advised' : ''}`;
   const who = document.createElement('div');
   who.className = 'who';
   who.textContent = charName(slot);
@@ -90,10 +97,12 @@ function render() {
   renderHand(state, live);
   renderTable(state);
   renderPrompt(state, live);
+  renderHint(live);
   renderPayouts();
   renderLog();
   renderQuestions();
   renderScrubber();
+  maybeAutoHint(live);
 }
 
 // ---------------------------------------------------------------- pacing ---
@@ -102,6 +111,8 @@ function onPayload(msg) {
   const isNewGame = !DATA || msg.setup.game_id !== DATA.setup.game_id;
   const prevData = DATA;
   DATA = msg;
+  HINT = null;   // the position moved; anything we were told about it is history
+  fillHintOptions();
 
   if (isNewGame) {
     shown = allEvents().length;
@@ -200,13 +211,20 @@ function renderHand(state, live) {
     return;
   }
   const remaining = freshSlots.slice();
+  // Marked on one copy only. Which copy hardly matters — the action is the slot, so
+  // any of them is the same move — but marking all three would read as "throw all
+  // of these", which is a different and much worse piece of advice.
+  let advised = live ? advisedSlot() : null;
   cards.forEach((slot) => {
     const clickable = canDiscard && decision.legal_mask[slot];
     // Mark one card per fresh slot, not every copy of it.
     const at = remaining.indexOf(slot);
     if (at !== -1) remaining.splice(at, 1);
+    const isAdvised = advised === slot;
+    if (isAdvised) advised = null;
     host.appendChild(cardEl(slot, {
       fresh: live && at !== -1,
+      advised: isAdvised,
       onClick: clickable ? (s) => send({ type: 'action', action: s }) : null,
     }));
   });
@@ -325,6 +343,109 @@ function renderPrompt(state, live) {
     b.textContent = 'Pass';
     b.onclick = () => send({ type: 'action', action: PASS });
     host.appendChild(b);
+  }
+}
+
+// ------------------------------------------------------------------ hints ---
+
+// Offered counts come from the server so the two cannot disagree about what is
+// allowed. 1024 is annotated with its measured effect rather than described as
+// "better", because that is the only reason to pay ten times the compute for it.
+function fillHintOptions() {
+  const sel = $('hint-particles');
+  if (sel.dataset.done || !DATA.hint_particles) return;
+  DATA.hint_particles.forEach((n) => {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = n === 1024 ? `${n} (+50 coins/game)`
+      : n === DATA.hint_particles_current ? `${n} (default)` : `${n}`;
+    if (n === DATA.hint_particles_current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.dataset.done = '1';
+}
+
+function advisedSlot() {
+  if (!HINT || !HINT.hint) return null;
+  const a = HINT.hint.action;
+  return a < DATA.setup.n_slots ? a : null;
+}
+
+function askHint() {
+  if (HINT_BUSY || !DATA) return;
+  HINT_BUSY = true;
+  HINT = null;
+  send({ type: 'hint', particles: Number($('hint-particles').value) });
+  renderHint(VIEW === null);
+}
+
+// Kept out of onPayload so it also fires when the narration finishes catching up,
+// or when the scrubber comes back to live — every path that newly exposes a
+// decision, rather than just the one that delivers it.
+function maybeAutoHint(live) {
+  if (!HINT_AUTO || !live || ticking || HINT || HINT_BUSY) return;
+  if (!DATA.decision) return;
+  askHint();
+}
+
+function renderHint(live) {
+  const host = $('hint-body');
+  const cost = $('hint-cost');
+  host.innerHTML = '';
+  cost.textContent = '';
+
+  if (HINT_BUSY) {
+    host.innerHTML = '<div class="idle">Thinking…</div>';
+    return;
+  }
+  if (!HINT || !HINT.hint) {
+    const why = !live ? 'Replay — the bot only advises on the live position.'
+      : ticking ? 'Waiting for the play-by-play to catch up.'
+      : !DATA.decision ? 'Nothing for you to decide yet.'
+      : 'Press Ask, or h, to see what the bot would do and why.';
+    host.innerHTML = `<div class="idle">${why}</div>`;
+    return;
+  }
+
+  const h = HINT.hint;
+  cost.textContent = `${HINT.particles} samples · ${HINT.ms} ms`;
+
+  const move = document.createElement('div');
+  move.className = 'move';
+  move.textContent = h.action_label;
+  host.appendChild(move);
+
+  // Deliberately not called "confidence" in the UI. It is the chance the *ranking*
+  // survives redrawing the belief; whether the bot's model of the game is right is
+  // a bigger question that no number here answers.
+  const pct = Math.round(h.confidence * 100);
+  const conf = document.createElement('div');
+  conf.className = 'conf';
+  const colour = pct >= 80 ? 'var(--good)' : pct >= 65 ? 'var(--warn)' : 'var(--bad)';
+  conf.innerHTML =
+    `<span class="bar"><i style="width:${pct}%;background:${colour}"></i></span>` +
+    `<span class="pct" style="color:${colour}">${pct}%</span>` +
+    `<span class="what">chance this ranking survives redrawing the belief — ` +
+    `not a claim about the model</span>`;
+  host.appendChild(conf);
+
+  if (h.reasoning) {
+    const prose = document.createElement('div');
+    prose.className = 'prose';
+    prose.textContent = h.reasoning;
+    host.appendChild(prose);
+  }
+
+  if (h.alternatives && h.alternatives.length) {
+    const alts = document.createElement('div');
+    alts.className = 'alts';
+    // Shown as how far behind the recommendation each option is. The absolute
+    // scores net danger off hand value, so printing them beside the headline's hand
+    // value would invite subtracting two different quantities.
+    alts.textContent = 'next best — ' + h.alternatives
+      .map((a) => `${a.label} ${Math.round(a.behind) <= 0 ? 'level' : '-' + Math.round(a.behind)}`)
+      .join(' · ');
+    host.appendChild(alts);
   }
 }
 
@@ -458,6 +579,9 @@ function renderScrubber() {
 // ------------------------------------------------------------------- wire ---
 
 $('newgame').onclick = () => { VIEW = null; send({ type: 'newgame' }); };
+$('hint-ask').onclick = askHint;
+$('hint-auto').onchange = (ev) => { HINT_AUTO = ev.target.checked; render(); };
+$('hint-particles').onchange = () => { if (HINT || HINT_AUTO) askHint(); else renderHint(VIEW === null); };
 $('live').onclick = () => { VIEW = null; render(); };
 $('skip').onclick = skipToNow;
 $('speed').onchange = (ev) => {
@@ -487,6 +611,8 @@ document.addEventListener('keydown', (ev) => {
     const cards = expand(currentState().hand);
     const slot = cards[Number(ev.key) - 1];
     if (slot !== undefined && d.legal_mask[slot]) send({ type: 'action', action: slot });
+  } else if (ev.key === 'h') {
+    askHint();
   } else if (ev.key === 'c' && d.legal_mask[DATA.setup.n_slots]) {
     send({ type: 'action', action: DATA.setup.n_slots });
   } else if (ev.key === 'p' && d.legal_mask[DATA.setup.n_slots + 1]) {
@@ -498,7 +624,17 @@ function connect() {
   socket = new WebSocket(`ws://${location.host}/ws`);
   socket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === 'error') { console.warn(msg.message); return; }
+    if (msg.type === 'error') { HINT_BUSY = false; console.warn(msg.message); render(); return; }
+    if (msg.type === 'hint') {
+      HINT_BUSY = false;
+      // Only trust it if the position has not moved underneath it. A hint arriving
+      // after a bot resolved a claim describes a game that no longer exists.
+      const live = DATA && DATA.decision;
+      HINT = (msg.hint && live && msg.turn_index === DATA.state.turn_index
+              && msg.decision === DATA.decision.decision) ? msg : null;
+      render();
+      return;
+    }
     onPayload(msg);
   };
   socket.onclose = () => {

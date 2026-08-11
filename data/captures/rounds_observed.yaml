@@ -1,0 +1,78 @@
+# Whole-table states transcribed from screenshots in data/tables/.
+#
+# Different evidence from payouts_observed.yaml: not scoring events but two frames
+# of the *same round*, two minutes apart, which is what makes them useful. A single
+# frame shows what the screen can say; a pair shows what the screen *forgets*, and
+# the forgetting is the constraint the M8 reader has to be designed around.
+#
+# The screenshots themselves stay local -- they carry the usernames of real people
+# in a live online match. Usernames are elided here to seat labels.
+
+roster:
+  # Read off the panel on the table, which stays up for the whole round rather than
+  # only at the deal. 17 characters, 4 groups.
+  characters: 17
+  groups:
+    GAMERS: [Shirakami Fubuki, Ookami Mio, Nekomata Okayu, Inugami Korone]
+    Gen4:   [Amane Kanata, Tsunomaki Watame, Tokoyami Towa, Himemori Luna]
+    Gen5:   [Yukihana Lamy, Momosuzu Nene, Shishiro Botan, Omaru Polka]
+    Myth:   [Mori Calliope, Takanashi Kiara, Ninomae Ina'nis, Gawr Gura, Watson Amelia]
+  sizes: [4, 4, 4, 5]
+  bonus: Gawr Gura
+  note: >
+    The panel is a fixed 4x5 grid. Unused cells hold a flat grey right-pointing
+    triangle, which is a placeholder and not a "more" affordance -- nothing scrolls,
+    and no group exceeds 5. So group size is read by counting non-placeholder cells,
+    a mean-colour test, with no character recognition involved.
+
+frames:
+  - source: data/tables/20260809073119_1.jpg
+    deck_pile: 30
+    coins: {bottom: 1780, left: 780, top: 420, right: 1020}
+    ranks:  {bottom: 1st, left: 3rd, top: 4th, right: 2nd}
+    hand_sizes: {bottom: 7, left: 7, top: 7, right: 7}
+    # The turn gate flashes rather than staying lit, so a null here means "caught in
+    # the dark phase", not "nobody to act". Confirmed by the player after these two
+    # frames disagreed about it.
+    seat_to_act: null          # gate dark this frame, and no seat holds a detached card
+    discards_visible:
+      bottom: [Himemori Luna, Tsunomaki Watame, Shishiro Botan, Tokoyami Towa, Amane Kanata]
+      left:   [Shirakami Fubuki, "Myth", Tokoyami Towa, Tsunomaki Watame, Yukihana Lamy]
+      top:    3                # count only; rotated 180 and small in this capture
+      right:  5
+
+  - source: data/tables/20260809073329_1.jpg
+    deck_pile: 0
+    coins: {bottom: 1430, left: 1430, top: 10, right: 1130}
+    ranks:  {bottom: 1st, left: 1st, top: 4th, right: 3rd}
+    hand_sizes: {bottom: 7, left: 8, top: 7, right: 7}
+    seat_to_act: left          # left gate lit yellow AND left holds a detached card
+    discards_visible:
+      bottom: [Shishiro Botan, Tokoyami Towa, Amane Kanata, Gawr Gura]
+      left:   ["Myth", Tokoyami Towa, Tsunomaki Watame, Yukihana Lamy]
+      top:    4
+      right:  5
+
+# --- what the pair settles -------------------------------------------------------
+#
+# Discards become unreadable, and not only when claimed. Between the two frames the
+# two oldest cards in front of me (Luna, Watame) went completely under a stack; I
+# know what they were solely because I hold the earlier frame. The stack renders as
+# a few offset card edges and then saturates, so a late-joining reader recovers
+# neither the cards nor their count. There is no clever frame to catch up from:
+# accumulate from the deal, and on losing track, stop advising.
+#
+# The flip side is that recent discards ARE reliable from one frame, in order --
+# they are the un-stacked ones, newest at the end furthest from the seat. So the
+# "last-3 discards" block in envs/obs.py is cheap even on a cold start, while the
+# full `table` vector is not.
+#
+# Coins total exactly 4000 here, in a game running to deck exhaustion with the last
+# seat still holding 10. Against 4030 in the game recorded in payouts_observed.yaml,
+# where a seat hit the floor. Minting is conditional on the floor actually biting,
+# which is how the engine models it -- and this frame is the negative control that
+# the earlier one lacked.
+#
+# Ranks are live and a tie shows the same rank twice: two seats both read "1st" at
+# 1430 in the second frame. Worth knowing before writing a rank parser that assumes
+# a permutation of 1..4.

@@ -44,8 +44,14 @@ deck:
 
 # ---------------------------------------------------------- characters --------
 # CONFIRMED that groups are revealed at game start and the deck only ever
-# contains characters from them. The specific roster is redrawn every game; this
-# one is the example from the real game used as the development default.
+# contains characters from them. The panel showing them stays on the table for the
+# whole round, not just at the deal, so the roster is always readable.
+# CONFIRMED that there are always 4 groups of at most 5, displayed in a fixed 4x5
+# grid with a placeholder glyph in unused cells. Sizes observed 4/4/3/5, 4/4/4/3
+# and 4/4/4/5.
+#
+# The specific roster is redrawn every game; this one is the example from the real
+# game used as the development default.
 # Character count observed between 14 and 19, typically 15-18.
 characters:
   - {id: tokino_sora,    name: "Tokino Sora"}

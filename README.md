@@ -9,33 +9,342 @@ reading the real game's screen so the bot can advise during live play.
 
 ## Status
 
-**M2 — playable in a browser.** Full game logic, an AEC environment, the confirmed
-payout table, and a web table you can sit down and play, with 80 tests passing.
-Games run roughly 43 turns and 11 Pokajans under greedy self-play, ending 86% on
-deck exhaustion and 14% on bankruptcy.
+**M7 — the bot explains itself, in the browser and in an overlay.** Full game logic,
+an AEC environment, the confirmed payout table, a web table you can sit down and play
+*with a hint panel*, an overlay window pinned over the screen, a two-level belief,
+three agents, a determinized-search implementation, and an evaluation harness, with
+333 tests passing.
+
+What remains before this is useful against the real game is recognition, and the cards
+themselves now read. Measured against a real frame by `scripts/check_vision.py`, with
+every region taken from `vision/layout.py` rather than from pixel coordinates:
+
+```
+holomem 18/19   colour 19/19   refused 1/19        ~10 ms/card
+```
+
+Zero misidentified, which is the number that matters — the one refusal is a discard
+buried under a stack whose crop is genuinely cut. Three findings made this work, and
+each replaced something that seemed more obvious:
+
+- **Split rows by the card's aspect ratio, not by the gaps between cards.** Gutters are
+  only about a tenth table-felt, and the glow around a highlighted pair erases one
+  entirely; gutter detection found one card where there were seven. Card shape is fixed,
+  so a row's height calibrates its own card width and the count is arithmetic.
+- **Read colour from the whole frame ring, reduced to its most saturated fifth.** The
+  artwork overflows the frame, so a single edge strip on a white-haired holomem samples
+  (225,223,231) — which is not blue, orange or pink.
+- **Refuse on a thin margin, not on a low score.** An unknown holomem still produces a
+  plausible best match, because the art is all portraits against pale backgrounds. What
+  a wrong answer cannot do is stand apart from the field: correct matches beat the
+  runner-up by 0.34 or more, while the also-rans sat within hundredths of each other.
+
+The catalogue is now **complete: 62 of 62 holomem, so all 1365 possible four-group rosters
+are fully covered.** That is the claim worth making rather than "complete for the rounds we
+have screenshots of", and `check_vision.py` recomputes the combination count every run.
+Doubling the catalogue barely moved the margins — 46 → 62 holomem cost the worst case 0.42
+to 0.42 and the tightest overall 0.24 to 0.22, against a threshold of 0.12 — which is the
+third time adding art has failed to make identification harder.
+
+Completing it did expose a real bug, of the worst available kind. `ninomae_ina'nis` kept its
+apostrophe through the filename rule, so the catalogue keyed on a name the engine has never
+heard of: `identify` would have returned a character that is not in the loaded `Rules`, and
+the card could not be turned into a slot at all. It had been invisible for weeks because the
+file that would expose it did not exist. **Naming something the engine does not know is worse
+than refusing, because a refusal is handled.** It showed up as 352 of 1365 rosters reporting a
+holomem with no art while coverage read 62 of 62 — two numbers that cannot both be true.
+
+An incomplete catalogue remains the *normal* state rather than an error state even so, because
+the roster is redrawn every round and hololive keeps debuting people. `core/roster.py` builds
+a game around whatever roster a round deals, 14 to 19 holomem across four groups, verified by
+playing every shape, and `TemplateSet.missing_from` answers "can I name every card this round"
+before the first turn rather than mid-hand.
+
+Regions are fractions of a **found** play area, not pixels: the game renders 16:9 and
+letterboxes it, so the bars get trimmed first and everything is relative to what is
+left. `scripts/check_layout.py` draws the regions back onto a frame, which is the only
+way to check a fraction means what it says — it caught four misplaced boxes on the first
+run, including one that had the bonus card sitting inside the group panel.
+
+**Numbers read too**, with the exemplars cut from the game's own typeface into a
+committed text file — the one thing derived from the captures that is safe to commit,
+since ten digit shapes carry no personal data and it lets the reader work without the
+screenshots. Every coin total and deck counter transcribed by eye reads correctly
+(18/18), and the reads check themselves against a rule: coins must total 4000 plus
+whatever the bankruptcy floor minted. Three frames come to exactly 4000, one to 4030
+matching the minting already recorded for that game, and two show all four seats on the
+opening 1000.
+
+Segmentation is where every real failure came from — not one was a mismatched glyph:
+
+- **Find glyphs as runs of ink, never at a fixed pitch.** The typeface is proportional.
+- **Strip horizontal rules first.** The underline beneath each coin display inks every
+  column, which collapsed whole numbers into one enormous glyph.
+- **Pick the band by height, not by ink.** A coin box also catches the player's name, and
+  a name in kanji carries more ink than the number below it.
+- **Filter ink by saturation.** Totals are white; the coin icon is yellow and the card
+  backs blue. This is what lets a box stay wide enough for four digits — narrowing one to
+  dodge the icon clipped the leading digit and turned 1430 into a confident **430**, which
+  is the only kind of error that matters here.
+
+**And the roster reads end to end**, which was the piece everything else waits on — the
+slot space, the belief and every payout are sized by it. Across every capture:
+
+```
+badges  56 read   0 wrong   12 refused        scores 0.82-0.98, tightest margin 0.22
+roster  12 read   0 wrong    5 refused        15, 16 and 17 characters, six rosters
+```
+
+All fifteen badges the game can print are covered, on both screens that show them. Every
+refusal is a frame where a payout panel covers the grid or the reveal screen mid-animation.
+The 17-character read matches a transcription made by hand, group for group.
+
+It works by not recognising anybody. The game draws real hololive branches, so the four
+short badges beside the panel — "Ga", "4", "5", "My" — determine the whole membership via
+a committed table, and the panel's own member counts check the answer without recognising
+anything at all. That replaces up to twenty portrait matches, which had scored **1/17**,
+with a four-way classification plus arithmetic.
+
+Four findings, and every one of them is about a *confidently wrong* answer rather than a
+failure to read — which is the only error class that matters here:
+
+- **A badge is not a digit even when it looks like one.** Feed "Ga" to the digit reader
+  and it answers **0**, at 0.74, with its runner-up 0.25 behind. A digit alphabet has
+  nothing for a G to compete against, so refusal never engages.
+- **"1ID" is ID Gen1 and "1" is Gen1** — different groups, different members, and the
+  entire difference is a small subscript. The first label box clipped it, so ID Gen1 read
+  as a confident Gen1 with nothing anywhere to object.
+- **Match the primary glyph and the subscript separately.** Matching each badge whole
+  worked at eight badges and broke at fifteen: "2ID" and "3ID" scored 0.86 against each
+  other — 0.14 of margin where 0.15 is required — because the identical "ID" is most of the
+  picture. Raising the canvas from 28px to 96px moved it not at all, since resolution does
+  not change a ratio. That is also the worst pair in the set to lose, because ID Gen2 and
+  ID Gen3 both have three members, so the member count cannot break the tie. As bare
+  numerals they score 0.74, a margin of 0.26.
+- **Stretch each glyph to fill the canvas; do not letterbox it.** The intuitive choice is
+  to keep the aspect, since "1" is narrow and "My" is wide. Measured, that is worse at
+  every canvas size from 12x18 to 36x36 — mean pairwise score 0.31 against 0.20, tightest
+  real margin 0.15 against 0.27 — because identical padding *correlates*, so two badges
+  sharing nothing but their empty margins still agree over those margins.
+
+The composed badge is then checked against the list the game actually prints. Without that,
+a "Ga" with an "ID" under it reads as "GaID" at 0.93, and there is no such group.
+
+Both screens read, and **neither is a fallback for the other**. The table panel sits out the
+whole round; the "Groups coming up" screen before the deal shows the same rows four times
+the size and is worth catching because it arrives before the first turn. Pointed at the
+wrong screen neither produces a single confident badge — but the table panel box counts
+[5, 5, 5, 5] on the reveal screen, four legal group sizes, so the count check alone would
+wave it through. The badges refusing is the only thing between a wrong screen and an
+invented roster.
+
+That work also closed the digit **5**, which appears in no number anywhere on the table —
+every payout is a multiple of ten, so no coin total ends in one. It was cut from the Gen5
+*badge* instead, the badges being the same typeface: coin-harvested exemplars match the
+Gen1–Gen4 badges at 0.86–0.97, the same range they score against the totals they came
+from. Adding it moved no existing read.
+
+Reading every harvest case back with the finished reader is worth the minute it takes: it
+found one transcribed as `1040` where the screen said `2270`, which had been feeding a `2`
+into the `1` exemplar and a `7` into the `4`. Averaging over several sightings had
+outvoted it, so nothing ever looked wrong.
+
+**A frame is now read whole.** `vision/reader.py` turns one settled frame into whatever it
+supports, and `scripts/capture.py` watches the game and writes that down. On the three clean
+table captures it reads everything there is: deck counter, all four coin totals summing to
+exactly 4000, the roster, the bonus holomem and all seven cards in hand, with no refusals at
+all.
+
+```
+r0  [table]  deck 71  coins 4000  gen1/gen2/gen5/id1  hand 7/7
+r0  [table]  deck 30  coins 4000  gamers/gen4/gen5/myth  hand 7/7
+r0  [reveal]  deck ?  coins 0/4  gen1/gen2/gen5/id1
+```
+
+Three decisions in there are worth more than the code:
+
+**No screenshot is ever written.** A frame is grabbed into memory, read, and dropped. That is
+stronger than deleting one afterwards — there is no moment at which a picture of a live online
+match against real people exists as a file. The history is a JSON Lines log instead, which is
+also why **every refusal is recorded**: anything the reader failed to notice went out of
+existence with the frame, so a hole in the log has to be visible as a hole rather than as
+silence. The one exception is small crops of the regions whose readers are not built yet, from
+an allowlist that excludes the coin boxes because those deliberately overlap the player's name.
+
+**A frame is read only once it has settled** — the same signature twice running. Reading
+mid-animation is how a reader produces a confident wrong answer instead of a refusal, and
+there is a capture that proves it: the reveal screen caught halfway through its zoom counts
+[5, 1, 2, 5] panel members and is saved only by 1 not being a group size. The change signature
+costs 1.1 ms per frame, down from 26 ms once it striped the pixels away before doing any
+arithmetic rather than after.
+
+**A frame whose group panel is covered is still read.** Those are the mid-payout frames, and
+abandoning them would be the worst available choice: a call's meld is the *only* moment
+`scored` is observable, since those cards then leave the table permanently. So the roster
+refuses and the coins are read anyway.
+
+What one frame cannot give is `table` and `scored` themselves, and that is the shape of what
+is left. **And it now watches the real game.** `scripts/capture.py` grabs the monitor, reads each frame
+and writes a line of text — no screenshot ever reaches the disk, which is stronger than
+deleting one afterwards: there is no moment at which a picture of a live online match exists as
+a file. The history lives in `data/games/*.jsonl`, refusals included, because a log with holes
+is far better than one with silent gaps.
+
+Two things it immediately proved wrong, both of them things that looked fine on saved captures:
+
+- **Gating on a settled table does not work.** The idea was that a still table is a safe one,
+  since a mid-animation frame is what produces a confident wrong read. Measured over 45 seconds
+  of live play: **2 of 77 consecutive frame pairs looked settled**, and the worst movement in
+  *every* region exceeded 190 of 255. A round in which the deck fell from 53 to 20 produced six
+  records — one frame in four turns. Something on this table is always moving. The gate is now
+  the **deck counter's value**, which falls by one on every draw and so is the game's own turn
+  clock, at 1.7 ms against 153 ms for a full read.
+- **A threshold tuned on Steam screenshots need not survive a live grab of the same pixels.**
+  The coin icon was inside `COINS["bottom"]` all along; on a JPEG it is saturated enough that
+  the pale-ink filter shreds it into fragments the height filter drops, so the box looked like
+  it excluded the icon. Live, it renders less saturated, survives as two 54–56px "glyphs", and
+  that box refused on **every frame of a real session**. Excluding by geometry is durable;
+  trusting a colour filter to remove something is a bet on the capture path.
+
+Fixing the second improved the saved captures too, which is how it earned its keep: a
+mid-payout frame that could not be totalled before now reads all four seats at **4030** —
+exactly 4000 plus the minting already recorded for that game.
+
+The reader's remaining hard part is now scoped rather than guessed. **Do not try to
+segment an opponent's discard field**: the seats either side lay their discards out as
+sheared diagonal staircases, so the field's bounding box is far wider than one card and
+uniform slicing cuts across cards — aspects of 1.26 and 1.54 where a clean sideways card
+gives 1.395. Rectifying that also buys the wrong thing, because the old cards in a pile
+are already accumulated and the buried ones are unreadable anyway. What a continuous
+reader needs is the *newest* card in each field, once per turn, at the un-stacked end
+furthest from its seat.
+
+That module is mostly refusals, and deliberately so. A misread roster produces a
+`Rules` that loads happily and then misprices the whole game, because the belief is
+inferred against a slot space that does not match reality — and advice from a wrong
+roster looks exactly like advice from a right one. So it raises rather than repairing,
+including on the constraint nobody thinks of: each (holomem, colour) slot holds at
+most three cards, so a 100-card deck needs at least twelve holomem to exist at all.
+
+The agent ladder, all measured by duplicate dealing with 4-seat rotation:
+
+| agent | vs greedy | vs heuristic | cost/decision |
+|---|---:|---:|---:|
+| **heuristic-p1024** — 1024 belief particles | — | **+50** [+16, +84] | 248 ms |
+| **heuristic** — belief-driven, expected coins | **+638** [+612, +664] | — | 24 ms |
+| **fast** — cheap valuation, belief defence | +500 [+457, +544] | −104 [−144, −64] | 6 ms |
+| **pimc** — determinized search | — | **−144** [−197, −92] | 250 ms |
+| greedy | — | −638 | 0.02 ms |
+
+Two results, and the contrast between them is the milestone. Determinized search —
+the whole point of M4 — is *worse* than the heuristic it wraps. Spending a
+comparable budget on belief precision instead is better. For almost identical
+compute, one lever is worth −144 and the other +50.
+
+`heuristic` stays the default at 48 particles rather than adopting the stronger
+setting, because a tenfold cost increase to buy 8% of its edge over greedy is a bad
+trade for the thing every matchup is measured against. `heuristic-p1024` is there
+for hint mode, where a quarter-second is free.
+
+Two other numbers worth keeping in view:
+
+| | |
+|---|---|
+| what discard safety is worth | **+173 coins/game** against an identical agent with defence off |
+| composition estimate vs the in-game counter | **9.3× more accurate** |
+
+That last row is the project's whole thesis in one number, and it is explained
+under [the one thing still assumed](#the-one-thing-still-assumed).
 
 ```powershell
 .\.venv\Scripts\python -m pokajan.server.app     # then open http://127.0.0.1:8000
 ```
 
 You take a seat, simple bots take the other three. The point is not the game — it
-is the three panels around it: every payout is shown with the arithmetic that
-produced it, the transcript reads like something you can hold next to a real round
-and check line by line, and the *Still guessing* tab lists the rules we are
-assuming rather than knowing. Play a real round alongside it and those go away.
+is the panels around it: every payout is shown with the arithmetic that produced it,
+the transcript reads like something you can hold next to a real round and check line
+by line, and the *Still guessing* tab lists the rules we are assuming rather than
+knowing. Play a real round alongside it and those go away.
+
+Press **h** and the bot says what it would do and why:
+
+```
+[DISCARD] discard Sakura Miko (pink)                 48 samples · 18 ms
+  50% chance this ranking survives redrawing the belief — not a claim about the model
+  Throw Sakura Miko (pink). What is left is worth about 256 coins, and it risks 18
+  if somebody claims it. This one is a coin flip: Hoshimachi Suisei (pink) is
+  within 0 coins, which is inside the sampling noise. Either is fine.
+  next best — Hoshimachi Suisei (pink) level · Ninomae Ina'nis (blue) -2
+```
+
+Three things about that output are deliberate, and each is a way the panel could
+have been worse:
+
+- **It reports a toss-up as a toss-up.** Opening discards usually are one: six draws
+  at 1024 particles on the same position produced three different answers. A panel
+  that manufactured a reason each time would be persuasive and wrong.
+- **The percentage is labelled with what it measures** — whether the *ranking*
+  survives resampling the belief. Model error is not in it. Calling it "confidence"
+  would imply a claim the number cannot support.
+- **Alternatives are shown as a gap, not a score.** A score nets danger off hand
+  value, so printing it beside the headline's hand value invites subtracting two
+  different quantities — which is exactly what happened while building this, reading
+  a 5-coin gap where the real one was nil.
+
+The sample count is selectable, with wall time shown, because that is the decision
+the overlay depends on: 48 samples costs ~16 ms, 1024 costs ~210 ms and is worth
++50 coins/game. Against the real game's ~10 s per turn, both are free — so the
+overlay can afford the expensive setting, and now that is measured rather than hoped.
 
 ```
 M0  core model, protocol, tests            <- done
 M1  engine + environment                   <- done
 M2  web GUI, human-playable                <- done
 M0b capture real payouts + card art        <- payouts confirmed; card art still open
-M3  observation encoder, belief, heuristic agent
-M4  PIMC agent
+M3  observation encoder, belief, heuristic agent, eval harness   <- done
+M4  PIMC agent                             <- built and measured; does not beat M3
 M5  vectorised env, behaviour cloning, PPO self-play
 M6  risk-conditioned training
-M7  hint mode + overlay
-M8  screen reading
+M7  hint mode + overlay                    <- done
+M8  screen reading                         <- layout, cards, numbers and roster read;
+                                              ranks and per-turn tracking remain
 ```
+
+**M7 and M8 do not depend on M5 or M6**, and the roadmap's ordering is misleading
+about that. It is the order for building the *best* agent, not for getting a usable
+overlay: the heuristic already plays well, already decides from a `PublicState`, and
+because `server/protocol.py` is the seam, dropping a trained agent in later changes
+nothing else. Taking the milestones in order would be two of them of delay for no
+benefit to the thing being built. See `CLAUDE.md` for the order that works.
+
+### Measuring an agent
+
+```powershell
+.\.venv\Scripts\python -m pokajan.train.evaluate --agent heuristic --baseline greedy
+```
+
+The game is violently high-variance — one monochrome five-group swings a game by
+more than the starting stack — so a plain "play 200 games and compare means" will
+report edges that are not there. Two things fix that, and neither is playing more
+games. The deck is **fixed per seed and replayed once per seat**, so seat
+advantage and opening-hand luck are experienced by both sides and cancel. And the
+four rotations of one deal are *correlated*, so the sample size is the number of
+seeds, not the number of games; error bars are computed over per-seed means.
+Treating 2000 games as 2000 observations understates the error by about half and
+is the easiest way to fool yourself here.
+
+The `by seat` line is the check that this worked: with duplicate dealing the
+spread across seats is ~58 coins, against per-game swings in the thousands.
+
+Registered agents: `random`, `greedy`, `heuristic`, `fast`, `heuristic-p1024` and
+`pimc`, plus the ablations that produced the numbers below — `heuristic-blind`
+(defence off), `heuristic-p16` (the prior PIMC actually runs on),
+`heuristic-combined`, `heuristic-mc` (sampled valuation), `pimc-d12` (truncated
+rollouts) and `pimc-calls` (search only call decisions). Every negative result in
+this README can be re-run from that list.
+
+Matchups involving `pimc` cost about 250 ms a decision, so they are run over fewer
+seeds; everything else is comfortable at 200-500.
 
 ### Diagnostics
 
@@ -72,6 +381,50 @@ composition from cards actually observed is not a refinement here; it is the onl
 way to know. That is what the composition posterior in `envs/belief.py` is for, and
 `pokajan/vision/` carries a note never to scrape the counter as truth.
 
+As of M3 that claim is measured rather than asserted. Against the true deck, the
+posterior's estimate of what is left is out by **0.11 cards per slot** where the
+counter's reasoning is out by **1.04** — 9.3× better, and the gap is structural
+rather than lucky, which is why `tests/scenarios/test_belief_scenarios.py` pins it
+as a ratio and fails if the posterior ever stops beating it.
+
+The inference is two levels, and the first is the one humans cannot do at all:
+
+1. **Composition** — how many copies of each card this game was built with.
+   Updated per slot from a hypergeometric likelihood, then coupled back together
+   so the totals come to exactly 100. That coupling is where "I have seen four of
+   these, so something else must be thinner than I thought" lives, and the in-game
+   counter cannot express it even in principle.
+2. **Location** — given a composition, where the unseen cards sit. Weighted
+   particles rather than per-slot averages, because the sharpest evidence is a
+   *joint* constraint: the engine only offers a claim to seats that could legally
+   make one, so a card left on the table has been declined by everyone who could
+   have used it. That rules out whole shapes of hand at once, and a per-slot
+   average would blur it away to nothing.
+
+Particles are also exactly what PIMC needs at M4, so the two consumers share one
+implementation instead of drifting apart.
+
+### What the heuristic does with it
+
+Everything is priced in coins, never in cards-from-completion. That sounds like a
+detail and is not: a hand one card from a monochrome triple (840) and a hand one
+card from a mixed one (120) are *identical* by any shanten count, and a hand two
+cards from 1800 beats a hand one card from 120. Ranking by distance ranks this game
+wrongly. So a hand is worth `payout x P(completing it)`, maximised over every
+target the roster admits, with the probability coming from the belief.
+
+One asymmetry is modelled exactly, because getting it wrong inflates every long
+shot: **a claim can only ever finish a hand.** Claiming is legal only when the
+claimed card completes the hand, so no number of opponent discards moves you from
+two short to one short. Only the last card gets the extra chances.
+
+Defence is the other half, and it matters more here than in most card games because
+a claim bills **the discarder alone** — there is no pot to share the damage. Each
+candidate discard is scored against the particles for what it would cost if
+claimed, taking a maximum across opponents rather than a sum, since only one claim
+can win. Both halves come out in coins, so the discard rule subtracts one from the
+other with no weighting factor to tune. Turning that term off costs 173 coins/game.
+
 Since the underlying rule is unobservable, M5 should train against a *mixture* of
 composition rules rather than committing to one — an agent calibrated to the wrong
 rule would be wrong in exactly the same confident way the in-game counter is.
@@ -82,6 +435,33 @@ rule would be wrong in exactly the same confident way the in-game counter is.
 py -3.12 -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m pytest
+```
+
+The overlay is a second window, pinned over whatever is on screen:
+
+```powershell
+.\.venv\Scripts\python -m pokajan.server.app          # leave this running
+.\.venv\Scripts\python -m pokajan.server.overlay --place   # drag to move, corner to resize
+.\.venv\Scripts\python -m pokajan.server.overlay      # pinned, inert
+.\.venv\Scripts\python -m pokajan.server.overlay --check   # report what actually applied
+```
+
+Frameless, transparent, always on top, and — the part that matters — it takes no
+clicks and never takes focus. The real game is played online against real people, so
+an advisory panel has to be physically incapable of interfering with input. That is
+enforced twice over: `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` on the window, and a
+socket the overlay can only read from.
+
+Being inert is also why placement needs its own mode — a window that takes no clicks
+cannot be dragged — and why `--check` exists. Every mechanism here fails *silently*:
+window styles that did not apply, a drag region pywebview never bound to, a resize
+API that never reached the page. So it reports all of them rather than assuming:
+
+```
+pinned: clicks pass through, and it will not take focus.
+styles  0x080d0028 [layered, click-through, no-activate]
+size    520x190 css at 2x = 1040x380 physical
+handles 1 drag region(s), pinned so no grip
 ```
 
 Training extras are separate, because the two machines this runs on need different
@@ -171,9 +551,9 @@ the max-EV and safe agents should disagree about.
 ```
 rules/pokajan_v1.yaml     every rule number, and nothing else
 pokajan/core/             cards, rules, hand evaluation, action space
-pokajan/envs/             environment, observations, belief         (M1/M3)
-pokajan/agents/           heuristic, PIMC, neural                   (M3-M6)
-pokajan/train/            behaviour cloning, PPO, evaluation        (M5+)
+pokajan/envs/             environment, observations, belief, determinize (M1/M3/M4)
+pokajan/agents/           heuristic, fast, PIMC, neural             (M3-M6)
+pokajan/train/            evaluation now; behaviour cloning, PPO    (M5+)
 pokajan/server/           protocol + web app                        (M2)
 pokajan/vision/           screen reading                            (M8)
 web/                      browser UI and overlay                    (M2/M7)
@@ -181,13 +561,141 @@ data/captures/            real-game payout observations and card art
 tests/                    invariants (any config) + scenarios (frozen fixture)
 ```
 
-Two files are load-bearing beyond their size:
+Three files are load-bearing beyond their size:
 
 - `pokajan/core/cards.py` fixes the count-vector layout. Everything downstream
   assumes it, and changing it invalidates every trained checkpoint.
+- `pokajan/envs/obs.py` fixes the observation layout, for the same reason. It
+  carries an `ObsSpec.signature` that gets stamped alongside the rules hash, so a
+  checkpoint cannot be loaded against a layout it was not trained under.
 - `pokajan/server/protocol.py` defines the only language spoken between "a game"
   and "something that plays it". At M8 the screen reader becomes just another
   producer of `PublicState`, and nothing else has to change.
+
+### Things tried that did not work
+
+Kept because a measured negative is worth more than an untested idea, and each is
+one flag away from being re-run against a better model.
+
+**Perfect-Information Monte Carlo (all of M4).** Sample worlds from the belief,
+play every candidate action to the end of the game in each, take the action that
+averages most coins. It came out at **−144 coins/game** (95% CI [−197, −92])
+against the heuristic it wraps, at 250 ms a decision.
+
+The interesting part is why, because it is a fact about Pokajan rather than about
+the implementation. Instrumenting real decisions showed the search overruling the
+heuristic on 62% of discards and agreeing on every call and chain, so the damage
+was entirely in discard selection. Measuring the signal directly:
+
+| | |
+|---|---|
+| mean difference between the top two discards | **29 coins** |
+| standard deviation of that difference, per world | **279 coins** |
+| standard error at 16 determinizations | **70 coins** — 2.4× the effect |
+| worlds where both discards ended identically | 67% |
+| determinizations needed to resolve the effect | **~481** (≈8 s/decision) |
+
+Changing a discard can flip whether somebody claims it; a claim changes how many
+cards get refilled, which shifts every subsequent draw for everyone. Two thirds of
+the time nothing diverges and the paired comparison is clean, but the other third
+explodes, and that tail is thirty times larger than the effect being measured. The
+search was picking among the heuristic's top three essentially at random, and
+replacing an informative ranking with noise costs exactly what you would expect.
+
+What was ruled out along the way, so the conclusion stands on evidence:
+
+- *A broken determinizer* — no. Handed the true hidden state, it reconstructs the
+  real engine exactly across 1200 decisions and every state field; that is now an
+  invariant test.
+- *A weak rollout policy* — no. Given perfect information it beats the heuristic by
+  **+519 coins/game**.
+- *A prior handicap* — mostly no. PIMC's internal heuristic runs on 16 belief
+  particles rather than 48, worth −38 (95% CI [−89, +13], not significant).
+- *Rollout chaos* — partly. Truncating rollouts to 12 rounds recovers about a third
+  of the gap (−144 → −85) and does not rescue it.
+- *Searching the wrong decisions* — searching only calls, claims and chains and
+  leaving discards to the heuristic lands at −68 (CI [−141, +5], not significant),
+  i.e. level with its own prior. Search adds nothing there either.
+
+More determinizations is the obvious remedy and the measurement prices it: ~481 per
+decision, thirty times the current budget, for one decision type. That is not a
+tuning problem. It is why the roadmap goes to a learned policy at M5 rather than to
+deeper search.
+
+**Replacing the completion probability with a Monte-Carlo one.** The heuristic
+prices a hand with a crude closed form — requirements treated as independent, a
+hand-tuned claim-efficiency constant, `(1−p)^opportunities`. The obvious upgrade is
+to sample futures from the belief instead and take `E[best payout reachable]`,
+which also prices two live chances correctly without the double-counting that sank
+the idea above. It is cheap (42 ms a decision) and it samples a quantity that does
+*not* diverge chaotically, so it avoids what killed PIMC.
+
+It came out at **−19 coins/game** (95% CI [−69, +32]) — level with the closed form,
+not better. Worth keeping for the one thing it did teach: the first version scored
+−132, and the whole difference was a horizon cap. Handed every card it will draw
+for the rest of the game, a sampled hand can assemble almost any target, because
+nothing in the sample makes it discard down to seven. Modelling the future without
+modelling the hand limit measures what is in the deck rather than what the hand can
+become. The sweep is recorded on `DEFAULT_HORIZON`.
+
+**Valuing a hand by combining its best few targets** instead of taking the best
+one. A maximum cannot see that two live chances beat one, which looked like a clear
+gap. Measured at **−38 coins/game** (95% CI [−89, +13]) over 480 games — targets
+overlap too heavily for independence to hold. See `TARGETS_COMBINED`.
+
+### Does more compute help?
+
+Asked directly, with a budget of five seconds per decision — comfortable for a live
+hint at M7 or for labelling training data at M5, and unusable inside a PPO loop.
+Three levers, all measured against the same heuristic:
+
+| lever | cost/decision | result |
+|---|---:|---|
+| **belief precision**, 48 → 1024 particles | 24 → 248 ms | **+50** [+16, +84], over 1280 games |
+| sampled valuation, 32 futures | 24 → 42 ms | −19 [−69, +32], not significant |
+| determinized search, 16 worlds | 24 → 250 ms | −144 [−197, −92] |
+
+Only the first one buys anything, and the reason is visible *before* running any
+matchup — which makes it a useful thing to check first next time. Both the belief
+and the search produce a noisy estimate of a quantity that differs between
+candidate discards. What matters is the ratio:
+
+| estimator | its noise ÷ the spread it must resolve |
+|---|---|
+| discard danger, 48 particles | **0.38** |
+| PIMC rollout value, 16 determinizations | **2.4** |
+
+Both converge with more samples. The difference is the rate at which they arrive
+somewhere useful: the danger estimate is already inside the signal and reaches
+0.10 for 20× the compute, while the rollout estimate starts at six times worse and
+needs about 30× the budget merely to draw level — eight seconds a decision, for one
+decision type. Cheap to measure, and it would have priced the whole milestone in an
+afternoon.
+
+The broader read, which shapes M5: this game's decisions are dominated by
+quantities the heuristic already computes directly — what a hand is worth and what
+a discard risks. Depth adds variance rather than insight, and the leverage is in
+knowing the cards better, not in looking further ahead.
+
+### What the failed milestone left behind
+
+Chasing the search produced four things that outlive it, three of which M5 needs:
+
+- **A search fast path on the engine.** `pending_seats()` / `apply()` answer the
+  same questions as `pending_decisions()` / `submit()` without building a
+  `PublicState` per seat — measured **79× cheaper**, and both public methods are
+  now implemented in terms of them so there is no second copy of the turn logic.
+- **`envs/determinize.py`**, which rebuilds a playable game from a `PublicState`
+  and a belief particle *and nothing else*. That constraint is the whole reason it
+  is written this way: at M8 the opponent is the real game and there is no engine
+  to clone, so anything that cannot search from a reconstructed public view is not
+  the agent this project is building.
+- **`FastAgent`** — the rollout policy's cheap valuation with belief-supplied
+  defence. It gives up 104 coins/game against the heuristic and runs 3× faster
+  (6 ms vs 19 ms a decision), which is the trade a self-play loop wants when the
+  opponent pool is queried millions of times.
+- **A 3.5× faster belief posterior**, from separating the bisection that finds the
+  deck-total tilt from the construction of the rows it tilts.
 
 ## Testing
 
@@ -201,6 +709,12 @@ Two tiers, and the split is the point:
   which is frozen and never edited. When real rules land, they get a `rules_v2.yaml`
   and new scenarios; the old ones still pass, proving the change did not disturb
   behaviour already verified.
+
+Since M3 the scenarios also pin *properties* that no payout can express: that the
+posterior beats the in-game counter by a margin rather than a hair, and that a card
+nobody claimed measurably lowers the odds that anybody could have. Those two run
+against the live config on purpose — the size of the decoy is a fact about the real
+game, not about a fixture — so they assert ratios, which survive a rules edit.
 
 The fixture deliberately makes a two-member group pay *less* than a triple, so that
 nothing in the codebase can quietly assume groups outrank triples.

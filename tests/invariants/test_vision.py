@@ -1,0 +1,660 @@
+"""The card reader's machinery, on synthetic images.
+
+Everything here is generated. The real card art and the real screenshots both live
+under `data/`, which is gitignored -- the captures are of live online games and carry
+other players' usernames -- so accuracy against the real thing is measured by
+`scripts/check_vision.py` on the machine that holds the data, and reported in the
+README. What is guarded here is the machinery that a good template set still needs in
+order to work: segmentation that calibrates itself, colour read from the frame rather
+than the artwork, and refusal when the answer is not clear.
+
+Refusal is the point of most of it. The catalogue can never be complete, because the
+game redraws its roster every round and can always deal somebody whose art has not
+been captured yet. A reader that names them anyway corrupts the belief silently, and
+wrong advice is indistinguishable from right advice.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+from PIL import Image
+
+from pokajan.vision.layout import find_play_area
+from pokajan.vision.geometry import (
+    frame_spans,
+    CARD_ASPECT,
+    FRAME_REFERENCES,
+    classify_colour,
+    find_row,
+    frame_colour,
+)
+from pokajan.vision.templates import (
+    CONFIDENT_MARGIN,
+    MIN_FLOOR,
+    MIN_MARGIN,
+    MIN_SCORE,
+    TemplateSet,
+    character_from_filename,
+    prepare,
+    query_variants,
+)
+
+pytestmark = pytest.mark.invariant
+
+FELT = (34, 139, 34)
+CARD_H = 160
+CARD_W = int(round(CARD_H * CARD_ASPECT))
+
+
+def CARD_W_AT(aspect: float) -> int:
+    """Card width at a given on-screen aspect, the height being fixed."""
+    return int(round(CARD_H * aspect))
+
+
+def art(seed: int, height: int, width: int) -> np.ndarray:
+    """A distinctive interior. Smoothed noise, so neighbouring pixels correlate the
+    way a portrait's do and cross-correlation has structure to work with."""
+    rng = np.random.default_rng(seed)
+    coarse = rng.integers(0, 255, size=(8, 6, 3)).astype(np.float32)
+    ys = np.linspace(0, 7, height).astype(int)
+    xs = np.linspace(0, 5, width).astype(int)
+    return coarse[np.ix_(ys, xs)].astype(np.uint8)
+
+
+def card(seed: int, colour: str = "pink", *, height: int = CARD_H,
+         overflow: bool = False) -> np.ndarray:
+    """A synthetic card: coloured frame, art inside."""
+    width = int(round(height * CARD_ASPECT))
+    made = np.zeros((height, width, 3), dtype=np.uint8)
+    made[:, :] = FRAME_REFERENCES[colour]
+    bx, by = int(width * 0.12), int(height * 0.08)
+    made[by:height - by, bx:width - bx] = art(seed, height - 2 * by, width - 2 * bx)
+    if overflow:
+        # Pale artwork spilling over the frame, which is what defeats sampling a
+        # single edge: a holomem with white hair reads as near-white there.
+        made[int(height * 0.3):int(height * 0.7), :bx] = 235
+    return made
+
+
+def row_of(cards: list[np.ndarray], pad: int = 24, gap_after: int | None = None,
+           gap: float = 1.0) -> np.ndarray:
+    """Lay cards out on felt, with a margin, the way the game does.
+
+    `gap_after` leaves a stretch of bare felt `gap` cards wide after that index, which is what
+    the game does when a seat holds its drawn card apart or a card is in flight.
+    """
+    height = cards[0].shape[0]
+    card_w = cards[0].shape[1]
+    hole = int(round(card_w * gap)) if gap_after is not None else 0
+    width = sum(c.shape[1] for c in cards) + hole
+    region = np.zeros((height + 2 * pad, width + 2 * pad, 3), dtype=np.uint8)
+    region[:, :] = FELT
+    x = pad
+    for index, one in enumerate(cards):
+        region[pad:pad + height, x:x + one.shape[1]] = one
+        x += one.shape[1]
+        if gap_after is not None and index == gap_after:
+            x += hole
+    return region
+
+
+# ------------------------------------------------------------ segmentation ---
+
+@pytest.mark.parametrize("before,after", [(5, 1), (4, 2), (1, 1), (6, 1)])
+def test_a_row_with_a_hole_in_it_is_not_one_row(before, after):
+    """A hand is not always contiguous, and measuring across the hole ruins every boundary.
+
+    Reported from a live session: the same hand positions refused on 72 of 77 frames while
+    their neighbours read perfectly. Positional and persistent, and nothing to do with the art
+    — the span from first card to last included a card-wide stretch of felt, so the count came
+    out too large and every slice landed a fraction of a card to the left of where it should.
+    Six of six cards read once each stretch is sliced on its own.
+    """
+    cards = [card(i, "blue") for i in range(before + after)]
+
+    row = find_row(row_of(cards, gap_after=before - 1))
+
+    assert row is not None
+    assert len(row.cards) == before + after
+    assert row.runs == (before, after)
+    assert row.detached == after
+
+
+def squashed_row(aspect: float, count: int) -> np.ndarray:
+    """A row as a further-away seat draws it: same height, foreshortened width."""
+    cards = [
+        np.asarray(Image.fromarray(card(i, "pink")).resize(
+            (CARD_W_AT(aspect), CARD_H), Image.LANCZOS))
+        for i in range(count)
+    ]
+    return row_of(cards)
+
+
+@pytest.mark.parametrize("aspect", [CARD_ASPECT, 0.765, 0.931])
+@pytest.mark.parametrize("count", [1, 3, 5, 7])
+def test_each_region_counts_correctly_given_its_own_aspect(aspect, count):
+    """`CARD_ASPECT` is your own hand's; the rest of the table is further from the camera.
+
+    Measured on live crops of lone cards: your own discards 0.765, the top seat's 0.931, against
+    the hand's 0.717. Given the right one, the count is exact at every length.
+    """
+    row = find_row(squashed_row(aspect, count), aspect=aspect)
+
+    assert row is not None
+    assert len(row.cards) == count
+
+
+def test_the_hands_aspect_miscounts_the_top_seat():
+    """Which is the failure that made this worth fixing, and it is not symmetric.
+
+    The count is `span / (height * aspect)` rounded, so a small aspect error rounds away and a
+    large one does not. The bottom seat is 0.765 against 0.717 -- under 7% -- and five cards
+    still come back as five, which is why its discards never looked broken. The top seat is
+    0.931, a 30% error, and five come back as **seven**; the boundaries then drift far enough
+    that one card is read with its neighbour's colour. Both of those are live observations.
+    """
+    top = squashed_row(0.931, 5)
+    bottom = squashed_row(0.765, 5)
+
+    # Not pinned to the live figure of seven: the true count lands near a rounding boundary, so
+    # the wrong answer is six here and was seven there. What matters is that it is not five.
+    assert len(find_row(top).cards) != 5
+    assert len(find_row(top, aspect=0.931).cards) == 5
+    assert len(find_row(bottom).cards) == 5, "a sub-7% error rounds away, as it does live"
+
+
+def test_a_gutter_is_not_a_hole():
+    """The distinction the whole change rests on, and the two are nowhere near each other.
+
+    Gutter detection is what this module replaced, because a gutter is barely felt at all — on
+    a real frame the gaps between cards are about a tenth felt and a highlight glow erases one
+    completely. A real hole is a whole missing card. Measured live: gutters about 0.05 of a
+    card, the hole 1.0. So an ordinary row must stay one run no matter how it is padded.
+    """
+    cards = [card(i, "orange") for i in range(7)]
+
+    assert find_row(row_of(cards)).runs == (7,)
+    assert find_row(row_of(cards, gap_after=3, gap=0.2)).runs == (7,)
+
+
+def test_a_hole_does_not_change_what_the_cards_are():
+    """The point of the fix: the cards either side of a hole must read exactly as they would
+    without it, since nothing about them has changed."""
+    cards = [card(i, "pink") for i in range(5)]
+    catalogue = TemplateSet({f"holomem_{i}": [prepare(card(i, "pink"))] for i in range(5)})
+
+    whole = find_row(row_of(cards))
+    holed = find_row(row_of(cards, gap_after=2))
+
+    assert [catalogue.identify(c).character for c in whole.cards] \
+        == [catalogue.identify(c).character for c in holed.cards]
+
+
+
+@pytest.mark.parametrize("count", [1, 2, 4, 5, 7, 8])
+def test_a_row_is_split_by_the_card_shape_not_by_the_gaps(count):
+    """Gutter detection is what this replaces, and it does not survive contact.
+
+    On a real frame the gaps between cards are only about a tenth felt, and the glow
+    around a highlighted pair erases one completely -- gutter splitting found one card
+    where there were seven. The aspect ratio is fixed, so the row's height calibrates
+    its own card width.
+    """
+    region = row_of([card(i, "blue") for i in range(count)])
+
+    row = find_row(region)
+
+    assert row is not None
+    assert len(row.cards) == count
+    assert row.card_height == pytest.approx(CARD_H, abs=2)
+
+
+def test_a_generous_region_does_not_change_the_answer():
+    """The caller should not have to crop tightly, because a screen reader cannot.
+
+    An absolute coverage threshold made this fail: four cards inside a region wide
+    enough for six never cover 60% of it at the rounded corners, so the band was
+    clipped, the card height came out 9% short, and every slice pulled in part of its
+    neighbour.
+    """
+    cards = [card(i, "pink") for i in range(4)]
+    tight = find_row(row_of(cards, pad=10))
+    loose = find_row(row_of(cards, pad=220))
+
+    assert tight is not None and loose is not None
+    assert len(loose.cards) == len(tight.cards) == 4
+    assert loose.card_height == pytest.approx(tight.card_height, abs=2)
+
+
+def test_disagreeing_with_an_expected_count_refuses_rather_than_inventing():
+    """A hand size known from elsewhere is a cross-check, never an override.
+
+    Slicing a misread region into the number of cards the caller hoped for is how a
+    reader produces a full hand of confident nonsense.
+    """
+    region = row_of([card(i) for i in range(5)])
+
+    assert find_row(region, expected=5) is not None
+    assert find_row(region, expected=6) is None
+
+
+def test_bare_felt_is_not_a_row_of_cards():
+    felt = np.zeros((200, 600, 3), dtype=np.uint8)
+    felt[:, :] = FELT
+
+    assert find_row(felt) is None
+
+
+# ------------------------------------------------------------------ colour ---
+
+@pytest.mark.parametrize("colour", sorted(FRAME_REFERENCES))
+def test_colour_is_read_from_the_frame(colour):
+    found, distance = classify_colour(frame_colour(card(1, colour)))
+
+    assert found == colour
+    assert distance < 30
+
+
+@pytest.mark.parametrize("colour", sorted(FRAME_REFERENCES))
+def test_pale_artwork_spilling_over_the_frame_does_not_wash_out_the_colour(colour):
+    """The measured failure: sampling one edge strip on a white-haired holomem gave
+    (225,223,231), which is not any of the three frame colours."""
+    found, _ = classify_colour(frame_colour(card(1, colour, overflow=True)))
+
+    assert found == colour
+
+
+def test_something_that_is_not_a_card_is_not_given_a_colour():
+    grey = np.full((CARD_H, CARD_W, 3), 128, dtype=np.uint8)
+
+    found, distance = classify_colour(frame_colour(grey))
+
+    assert found is None
+    assert distance > 0
+
+
+# --------------------------------------------------------------- catalogue ---
+
+@pytest.mark.parametrize("stem, expect", [
+    ("gawr_gura_COLORLESS", "gawr_gura"),
+    # The same holomem in two groups is the same picture, so the group tag is not part
+    # of the identity. Collapsing them is also what keeps the margin meaningful.
+    ("shirakami_fubuki_COLORLESS", "shirakami_fubuki"),
+    ("shirakami_fubuki_GAMERS_COLORLESS", "shirakami_fubuki"),
+    # Punctuation is folded away, because no id the rest of the program uses has any.
+    ("ninomae_ina'nis_COLORLESS", "ninomae_inanis"),
+    ("la+plus_darkness_COLORLESS", "laplus_darkness"),
+])
+def test_a_filename_becomes_the_id_the_engine_uses(stem, expect):
+    assert character_from_filename(stem) == expect
+
+
+def test_a_template_id_is_a_name_the_group_table_knows():
+    """The rest of the program keys on canonical ids, so a template must produce one.
+
+    This used to fail on exactly one holomem and nothing noticed, because the failing
+    filename did not exist yet: `ninomae_ina'nis` kept its apostrophe, so `identify` named a
+    character the loaded `Rules` had never heard of and the card could not be turned into a
+    slot. It surfaced the moment the art arrived that completed the catalogue -- 352 of the
+    1365 possible rosters reporting a holomem with no art while coverage read 62 of 62.
+
+    Naming something the engine does not know is worse than refusing, because a refusal is
+    handled and this is not.
+    """
+    from pokajan.vision.roster_panel import GroupBook
+
+    book = GroupBook.load()
+    for character in book.characters:
+        assert character_from_filename(f"{character}_COLORLESS") == character
+
+
+def test_the_two_normalisers_agree():
+    """`templates` and `roster_panel` fold punctuation independently; they must not drift.
+
+    Independent because neither should import the other for this, but the two ids meet
+    whenever art coverage is checked against a roster -- so a difference would read as a
+    holomem with no art, which is what the bug above looked like.
+    """
+    from pokajan.vision.roster_panel import _normalise_id
+
+    for raw in ("ninomae_ina'nis", "la+plus_darkness", "gawr_gura", "IRyS"):
+        assert character_from_filename(f"{raw}_COLORLESS") == _normalise_id(raw)
+
+
+def catalogue(seeds) -> TemplateSet:
+    return TemplateSet({f"holomem_{s}": [prepare(card(s))] for s in seeds})
+
+
+def test_a_known_holomem_is_named():
+    found = catalogue(range(8)).identify(card(3, "orange"))
+
+    assert found.character == "holomem_3"
+    assert found.confident
+    assert found.margin >= MIN_MARGIN
+
+
+def test_a_holomem_with_no_art_is_refused_rather_than_guessed():
+    """The normal state, not an error state. The roster is redrawn every round, so a
+    game can always deal somebody whose card has never been captured."""
+    found = catalogue(range(8)).identify(card(999))
+
+    assert not found.confident
+    assert found.character is None
+
+
+def veiled(seed: int, alpha: float, colour: str = "orange") -> np.ndarray:
+    """A card seen through noise, the way a meld is seen through a payout animation.
+
+    The payout rains coins across the table, so the same art that scores 0.53-0.78 on a saved
+    screenshot scores 0.37-0.44 live. This is the only way to reach that band in a test: the
+    real corpus has no example, because a card that dim is exactly what used to be thrown away.
+    """
+    rng = np.random.default_rng(0)
+    art = card(seed, colour).astype(np.float32)
+    veil = rng.integers(0, 256, art.shape).astype(np.float32)
+    return np.clip(art * (1 - alpha) + veil * alpha, 0, 255).astype(np.uint8)
+
+
+def test_a_dim_card_that_stands_clearly_apart_is_named():
+    """The score floor cannot simply be lowered -- the left and bottom meld boxes overlap
+    permanent furniture matching at 0.30 and 0.42 -- so a decisive margin is the second way
+    past it. Measured across 64 meld-slot refusals: furniture +0.00 to +0.11, real cards
+    +0.19 to +0.24, nothing in between."""
+    found = catalogue(range(8)).identify(veiled(3, 0.75))
+
+    assert found.score < MIN_SCORE, "the point of this test is a sub-floor score"
+    assert found.margin >= CONFIDENT_MARGIN
+    assert found.character == "holomem_3" and found.confident
+
+
+def test_a_card_too_dim_to_match_is_refused_however_decisive_the_margin():
+    """`MIN_FLOOR` is the backstop. A margin is a ratio: as a card fades, its score and its
+    runner-up's fall together, so the margin can stay respectable long after the best match
+    has stopped meaning anything. Without a floor, noise with a clear winner reads as a card
+    -- and a wrong card written into `scored` is the one failure this layer exists to
+    prevent."""
+    found = catalogue(range(8)).identify(veiled(3, 0.80))
+
+    assert found.margin >= CONFIDENT_MARGIN, "margin alone would have accepted this"
+    assert found.score < MIN_FLOOR
+    assert found.character is None and not found.confident
+
+
+def test_a_respectable_score_with_an_indecisive_margin_is_still_refused():
+    """The gap the whole rule lives in, and the one a mutation walked straight through.
+
+    Score 0.43 clears `MIN_FLOOR` and margin +0.15 clears `MIN_MARGIN`, so dropping the margin
+    from the confident test lets this through -- and this is not a hypothetical shape. The
+    bottom meld box overlaps furniture that matches `kaela_kovalskia` at exactly 0.42 on
+    frames minutes apart. What says it is not a card is that nothing stands apart from the
+    field, which is why `CONFIDENT_MARGIN` sits above `MIN_MARGIN` rather than replacing it.
+    """
+    rng = np.random.default_rng(0)
+    art = card(3, "orange").astype(np.float32)
+    rival = card(4, "orange").astype(np.float32)
+    veil = rng.integers(0, 256, art.shape).astype(np.float32)
+    muddled = np.clip((art * 0.62 + rival * 0.38) * 0.4 + veil * 0.6, 0, 255).astype(np.uint8)
+
+    found = catalogue(range(8)).identify(muddled)
+
+    assert MIN_FLOOR <= found.score < MIN_SCORE, "must sit in the band the rule governs"
+    assert MIN_MARGIN <= found.margin < CONFIDENT_MARGIN
+    assert found.character is None and not found.confident
+
+
+def test_furniture_under_the_floor_is_still_refused():
+    """The case the margin gate is protecting. Flat grey is not a card, and the thing that
+    says so is that nothing stands apart -- not that it scores badly."""
+    found = catalogue(range(8)).identify(np.full((CARD_H, CARD_W, 3), 128, dtype=np.uint8))
+
+    assert found.margin < CONFIDENT_MARGIN
+    assert found.character is None
+    assert found.reason
+
+
+def test_two_holomem_that_look_alike_are_refused_not_picked_between():
+    """Margin, not score, is the refusal signal.
+
+    A wrong answer can score respectably -- the art is all portraits against pale
+    backgrounds. What it cannot do is stand clearly apart from the field.
+    """
+    twin = prepare(card(3))
+    ambiguous = TemplateSet({"one": [twin], "two": [twin.copy()]})
+
+    found = ambiguous.identify(card(3))
+
+    assert not found.confident
+    assert found.margin < MIN_MARGIN
+
+
+def test_an_empty_catalogue_refuses_everything():
+    found = TemplateSet({}).identify(card(1))
+
+    assert not found.confident
+    assert "no card art" in found.reason
+
+
+def test_the_offset_search_can_only_help():
+    """The jitter grid must contain the plain crop.
+
+    It did not: the grid was centred on the card's midpoint while the templates are cut
+    from a crop centred higher, so the unjittered variant was not the plain crop and
+    well-framed cards scored 0.09 *lower* with the search than without it. Silent, and
+    it looks like the templates being poor.
+
+    Asserted on the score rather than on pixels: resizing the whole card and cropping is
+    equivalent in coverage to cropping and resizing, but not identical, because the
+    resampling kernel sees different neighbours at the boundary. What must hold is that
+    a card matched against a template cut from itself still scores ~1.
+    """
+    subject = card(3, "blue")
+    itself = TemplateSet({"holomem_3": [prepare(subject)]})
+
+    found = itself.identify(subject)
+
+    assert found.score > 0.95, f"the search lost {1 - found.score:.3f} of a perfect match"
+    assert len(query_variants(subject)) == 27
+
+
+def test_coverage_against_a_roster_is_reported_before_a_round_starts(real_rules):
+    """Because the answer decides whether the reader can advise at all, and finding
+    out mid-hand means finding out as a card nobody can name."""
+    from pokajan.core.roster import roster_of
+
+    roster = roster_of(real_rules)
+    known = roster.characters[:3]
+    partial = TemplateSet({cid: [prepare(card(i))] for i, cid in enumerate(known)})
+
+    missing = partial.missing_from(roster)
+
+    assert set(missing) == set(roster.characters) - set(known)
+    assert not TemplateSet({c: [prepare(card(i))] for i, c in
+                            enumerate(roster.characters)}).missing_from(roster)
+
+
+# ------------------------------------------------------------------ layout ---
+#
+# The regions themselves are checked by eye with scripts/check_layout.py, because a
+# fraction is impossible to verify by reading. What is guarded here is the frame
+# handling underneath them: finding the play area, and refusing when it is not there.
+
+def letterboxed(width: int = 640, height: int = 400, bars: int = 20) -> np.ndarray:
+    """A frame with black bars top and bottom, as the game is captured."""
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[bars:height - bars, :] = FELT
+    return frame
+
+
+def test_the_play_area_is_found_rather_than_assumed():
+    """Every capture so far is 2880x1800 with 90-pixel bars, leaving exactly 16:9.
+
+    Absolute pixel coordinates would be a promise about one window size, broken by a
+    different monitor or a resized window.
+    """
+    from pokajan.vision.layout import find_play_area
+
+    height, bars = 400, 20
+    area = find_play_area(letterboxed(height=height, bars=bars))
+
+    assert area is not None
+    assert (area.x, area.y) == (0, bars)
+    assert area.height == height - 2 * bars
+    assert area.aspect == pytest.approx(16 / 9, abs=0.05)
+
+
+def test_a_frame_that_is_not_the_game_is_refused():
+    """Refusing here is far cheaper than every region afterwards being offset."""
+    from pokajan.vision.layout import find_play_area
+
+    assert find_play_area(np.zeros((400, 640, 3), dtype=np.uint8)) is None, "all black"
+    assert find_play_area(np.full((400, 400, 3), 90, dtype=np.uint8)) is None, "square"
+    assert find_play_area(np.zeros((4, 4, 3), dtype=np.uint8)) is None, "tiny"
+
+
+def test_regions_scale_with_the_play_area():
+    """The same fractions must land on the same content at any capture size."""
+    from pokajan.vision.layout import HAND, find_play_area
+
+    small = find_play_area(letterboxed(640, 400, 20))
+    large = find_play_area(letterboxed(1920, 1200, 60))
+
+    for box, area in ((HAND, small), (HAND, large)):
+        left, top, right, bottom = box.pixels(area)
+        assert (left / area.width) == pytest.approx(box.left, abs=0.002)
+        assert ((top - area.y) / area.height) == pytest.approx(box.top, abs=0.002)
+        assert right > left and bottom > top
+
+
+def test_a_vertical_row_is_split_and_turned_upright():
+    """The seats either side of you run their discards down the screen.
+
+    Without this the same code returns one enormous card with an aspect around 0.42,
+    which nothing downstream recognises as wrong -- it is simply a crop that never
+    matches. Their real fields are also sheared, which is why the reader targets the
+    newest card rather than the whole field; this covers the axis-aligned part.
+    """
+    from pokajan.vision.geometry import find_row
+
+    cards = [card(i, "blue") for i in range(4)]
+    sideways = np.rot90(row_of(cards), 1)          # a column, cards on their side
+
+    row = find_row(sideways, vertical=True, rotate=-90)
+
+    assert row is not None
+    assert len(row.cards) == 4
+    for one in row.cards:
+        upright = one.shape[1] / one.shape[0]
+        assert upright == pytest.approx(CARD_ASPECT, abs=0.05), "not turned upright"
+
+
+# ------------------------------------------------------------- locating cards ---
+#
+# `frame_spans` answers "is there a card here, and where" without being told what size a card
+# is in this part of the table. It exists for one open question: the payout meld moves with the
+# seat that called, so `layout.PAYOUT_MELD` -- pinned by two captures that turn out to be the
+# same caller -- locates a right-seat meld and nothing else.
+
+def test_a_row_of_cards_is_located_without_being_told_their_size():
+    region = row_of([card(1, "blue"), card(2, "pink"), card(3, "orange")])
+    spans = frame_spans(region)
+
+    assert len(spans) == 1
+    x0, x1, y0, y1 = spans[0]
+    # The three cards sit inside a 24px margin, so the span covers most of the region.
+    assert 0.0 < x0 < 0.12 and 0.88 < x1 <= 1.0
+    assert 0.0 < y0 < 0.20 and 0.80 < y1 <= 1.0
+
+
+def test_bare_felt_holds_no_cards():
+    felt = np.zeros((200, 600, 3), dtype=np.uint8)
+    felt[:, :] = FELT
+    assert frame_spans(felt) == ()
+
+
+def test_the_payout_panels_are_not_mistaken_for_cards():
+    """The middle of the table is full of things that are not felt: the deck pile, the decoy
+    card list, the near-white payout panels, and the game-over banner. Keying on "not felt"
+    would return all of them; only cards are strongly blue, orange or pink."""
+    region = np.zeros((200, 600, 3), dtype=np.uint8)
+    region[:, :] = FELT
+    region[40:160, 60:300] = 244          # a payout panel
+    region[40:160, 340:560] = (90, 90, 95)   # a card back / grey tile
+    assert frame_spans(region) == ()
+
+
+def test_two_separated_cards_are_two_spans():
+    region = row_of([card(1, "blue"), card(2, "pink")], gap_after=0, gap=2.0)
+    assert len(frame_spans(region)) == 2
+
+
+# ------------------------------------------------- narrowing and diagnosing ---
+#
+# A round the reader could not advise on at all turned on both of these: `amelia_watson` at
+# 0.42 against a 0.45 floor on 68 of 86 frames, refused every time, with the log recording only
+# the score. The margin is the number this module says carries the decision, and it was the one
+# number the refusal threw away.
+
+def test_a_refusal_on_score_still_reports_the_margin():
+    """Without it a log says "only scored 0.42" on every frame of a round and there is no way
+    to tell a correct read sitting under the floor from a coin-flip."""
+    catalogue = TemplateSet({"a": [prepare(card(1))], "b": [prepare(card(2))]})
+
+    match = catalogue.identify(np.full((160, 115, 3), 128, dtype=np.uint8))
+
+    assert match.character is None
+    assert "margin" in match.reason
+
+
+def test_a_refusal_still_names_its_best_match():
+    """A refusal is not the same as no information: the bonus card is the same card on every
+    frame, so many sub-threshold reads naming one holomem are evidence no single frame is."""
+    catalogue = TemplateSet({"a": [prepare(card(1))], "b": [prepare(card(2))]})
+
+    match = catalogue.identify(np.full((160, 115, 3), 128, dtype=np.uint8))
+
+    assert match.character is None and match.best in {"a", "b"}
+
+
+def test_restricting_to_the_roster_cannot_change_a_confident_answer():
+    """It removes candidates, so the winner either survives or there is no winner. What it
+    changes is the margin, by taking away runner-ups the round could never have dealt."""
+    art = {name: [prepare(card(seed))] for seed, name in enumerate("abcde", start=1)}
+    catalogue = TemplateSet(art)
+    query = card(3)
+
+    everyone = catalogue.identify(query)
+    subset = catalogue.identify(query, among=["a", "c", "e"])
+
+    assert everyone.character == subset.character
+    assert subset.margin >= everyone.margin
+
+
+def test_a_roster_with_no_art_at_all_refuses_rather_than_ranking_nothing():
+    catalogue = TemplateSet({"a": [prepare(card(1))]})
+
+    match = catalogue.identify(card(1), among=["someone_else"])
+
+    assert match.character is None and "roster" in match.reason
+
+
+def test_the_letterbox_boundary_is_exact_on_a_frame_big_enough_to_be_strided():
+    """Every row and column is still tested; only the pixels *within* them are sampled.
+
+    The distinction is the whole point of the optimisation and is invisible on a small
+    synthetic frame, where the stride is 1 and nothing is skipped. At full resolution this ran
+    on every poll for 178 ms, which is most of why a live round managed 2.2 seconds between
+    frames -- but subsampling the rows and columns as well would round the boundary to the
+    stride, and every region below is a fraction of it.
+
+    Bars of 11 rather than a round number precisely so a rounded boundary shows up.
+    """
+    bar = 11
+    frame = np.zeros((718 + 2 * bar, 1280, 3), dtype=np.uint8)
+    frame[bar:-bar] = (40, 120, 40)          # felt between the bars
+
+    area = find_play_area(frame)
+
+    assert area is not None
+    assert (area.y, area.height) == (bar, 718)
+    assert (area.x, area.width) == (0, 1280)

@@ -1,0 +1,156 @@
+# The groups the game draws its roster from, and who is in them.
+#
+# Committed, like data/captures/digits.yaml and unlike anything image-shaped: this is
+# public information about a VTuber agency, not data about the people we played against.
+#
+# WHY THIS FILE EXISTS. The game reveals four groups a round and shows their members as
+# head-and-shoulders portraits. Reading those portraits with the card art scores 1/17 --
+# they are a different rendering, not a crop -- so recognising them would need a second
+# template set of its own. It does not have to: the game uses real hololive branches, so
+# knowing *which four groups* were drawn is enough to know the whole roster.
+#
+# That turns roster reading into a four-way label classification plus a lookup, and the
+# `size` below is what checks it. The panel is a fixed 4x5 grid whose unused cells hold a
+# flat grey placeholder, so counting real cells needs no recognition at all -- and a count
+# that disagrees with the size here means the label was misread. A wrong roster is silent
+# and disastrous (see pokajan/core/roster.py), so that disagreement must refuse.
+#
+# `confirmed: capture` means the membership was transcribed from a real round, not
+# recalled. The rest is from public knowledge and is checked against `size` at load; if
+# the game ever shows a count that disagrees, trust the game and fix the entry here.
+#
+# `badge` and `label` are what the card and the panel print, for the classifier to match.
+
+groups:
+  - id: gen0
+    label: "Gen0"
+    badge: "0"
+    size: 5
+    confirmed: capture
+    members: [tokino_sora, roboco, azki, sakura_miko, hoshimachi_suisei]
+
+  # Four, not five: the game leaves graduated and terminated members out, so Mel is
+  # absent. Inferred from the art the player has and the list of what they still need --
+  # every holomem the game can deal is one they expect to capture, and she is not on it.
+  # The same pattern already explains Gen3 without Rushia and Gen4 without Coco.
+  #
+  # The size is now confirmed rather than inferred: three captures show a row badged "1"
+  # holding four portraits and a placeholder. Which four is still inference.
+  - id: gen1
+    label: "Gen1"
+    badge: "1"
+    size: 4
+    confirmed: capture
+    members: [aki_rosenthal, akai_haato, natsuiro_matsuri, shirakami_fubuki]
+
+  # Fubuki is in both Gen1 and GAMERS, and her card art carries a per-group variant. The
+  # player's judgement is that the game never draws both as goals in one round, so
+  # core/roster.py refuses a roster where a holomem appears twice rather than modelling
+  # it. If a panel ever shows her in two rows, that refusal is the assumption to revisit.
+  - id: gamers
+    label: "GAMERS"
+    badge: "Ga"
+    size: 4
+    confirmed: capture
+    members: [shirakami_fubuki, ookami_mio, nekomata_okayu, inugami_korone]
+
+  # Four for the same reason: Aqua has graduated. Size confirmed by capture, membership
+  # still inferred.
+  - id: gen2
+    label: "Gen2"
+    badge: "2"
+    size: 4
+    confirmed: capture
+    members: [murasaki_shion, nakiri_ayame, yuzuki_choco, oozora_subaru]
+
+  - id: gen3
+    label: "Gen3"
+    badge: "3"
+    size: 4
+    members: [usada_pekora, shiranui_flare, shirogane_noel, houshou_marine]
+
+  - id: gen4
+    label: "Gen4"
+    badge: "4"
+    size: 4
+    confirmed: capture
+    members: [amane_kanata, tsunomaki_watame, tokoyami_towa, himemori_luna]
+
+  - id: gen5
+    label: "Gen5"
+    badge: "5"
+    size: 4
+    confirmed: capture
+    members: [yukihana_lamy, momosuzu_nene, shishiro_botan, omaru_polka]
+
+  - id: holox
+    label: "holoX"
+    badge: "X"
+    size: 5
+    members: [laplus_darkness, takane_lui, hakui_koyori, sakamata_chloe, kazama_iroha]
+
+  - id: myth
+    label: "Myth"
+    badge: "My"
+    size: 5
+    confirmed: capture
+    members: [mori_calliope, takanashi_kiara, ninomae_inanis, gawr_gura, amelia_watson]
+
+  - id: promise
+    label: "Promise"
+    badge: "Pr"
+    size: 5
+    members: [irys, ceres_fauna, ouro_kronii, nanashi_mumei, hakos_baelz]
+
+  # The ID branches print their generation NUMBER large with a small "ID" beneath it, so
+  # the badge is "1ID", not "ID". Recorded here as "ID" until a capture was looked at
+  # closely, which mattered more than it sounds: the label box was clipping the subscript,
+  # so ID Gen1 was reading as a confident bare "1" -- Gen1, a real group with four
+  # different members and no refusal anywhere in sight.
+  - id: id1
+    label: "ID Gen1"
+    badge: "1ID"
+    size: 3
+    confirmed: capture
+    members: [ayunda_risu, moona_hoshinova, airani_iofifteen]
+
+  - id: id2
+    label: "ID Gen2"
+    badge: "2ID"
+    size: 3
+    members: [kureiji_ollie, anya_melfissa, pavolia_reine]
+
+  - id: id3
+    label: "ID Gen3"
+    badge: "3ID"
+    size: 3
+    confirmed: capture
+    members: [vestia_zeta, kaela_kovalskia, kobo_kanaeru]
+
+  - id: advent
+    label: "Advent"
+    badge: "Ad"
+    size: 5
+    members: [shiori_novella, koseki_bijou, nerissa_ravencroft, fuwawa_abyssgard,
+              mococo_abyssgard]
+
+  - id: regloss
+    label: "ReGLOSS"
+    badge: "Re"
+    size: 5
+    members: [otonose_kanade, hiodoshi_ao, ichijou_ririka, juufuutei_raden,
+              todoroki_hajime]
+
+# Punctuation is normalised away before lookup, so an apostrophe in a filename needs no
+# entry here: ninomae_ina'nis resolves on its own, as will any name like it.
+#
+# This table is only for spellings normalisation cannot reach. It is empty because the
+# player renamed the files that needed it -- three names shortened to one word (flare,
+# lui, la+_darkness) and one typo (usada_pekore) each appeared once and were fixed at
+# source, which is better than carrying a mapping forever.
+#
+# NEVER replace an entry here with fuzzy matching. That typo was one letter from a real
+# holomem, and a resolver willing to close a one-letter gap would as readily map a genuine
+# holomem onto the wrong one. `coverage` reports the filename instead, and the player
+# fixes it -- which is what happened, and it took one message.
+aliases: {}

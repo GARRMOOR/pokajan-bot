@@ -1,0 +1,17 @@
+# Screen reading (M8). Installed on top of requirements.txt.
+#
+#   .\.venv\Scripts\pip install -r requirements-vision.txt
+#
+# numpy appears here as well as in requirements-train.txt, and that is deliberate: the
+# two are wanted for opposite reasons and one may be installed without the other. The
+# engine, belief and agents still may not import it -- they run on plain lists because
+# numpy's per-call overhead dominates on arrays of fifty-odd elements, and that is a
+# measured choice, not an aesthetic one. Vision is the other extreme: megapixel frames
+# where the array operation *is* the work.
+numpy==2.5.2
+pillow==12.3.0
+# Screen grabbing. Read-only by design and by scope: this project never sends input to
+# the game -- no synthetic clicks, no keystrokes -- so a capture library is the entire
+# input surface. mss is chosen for being small, dependency-free and returning a raw
+# buffer we can wrap in numpy without a copy through PNG.
+mss==10.1.0

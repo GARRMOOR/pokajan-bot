@@ -11,8 +11,16 @@ runs/
 *.pt
 *.ckpt
 
-# Captured game data: screenshots are large and may contain usernames of other
-# players. Tracked selectively — see data/captures/README.md
-data/captures/**
+# Captured game data: screenshots are large and carry the usernames of real
+# people in a live online match. Nothing image-shaped leaves this machine.
+#
+# Tracked selectively — the transcribed observations in *.yaml are the durable
+# artifact, and they contain no personal data. See data/captures/README.md.
+data/**
+!data/**/
 !data/captures/README.md
-!data/captures/*.yaml
+!data/**/*.yaml
+!data/**/*.md
+
+# Machine-specific overlay geometry — a property of a monitor, not the project.
+overlay.json
