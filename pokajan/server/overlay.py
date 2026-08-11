@@ -2,7 +2,7 @@
 
     python -m pokajan.server.overlay            # follows the table on :8000
     python -m pokajan.server.overlay --place    # movable, so you can position it
-    python -m pokajan.server.overlay --check    # verify the window styles, then exit
+    python -m pokajan.server.overlay --check    # verify styles and placement, then exit
 
 A frameless, transparent, always-on-top window that never takes focus and never
 takes a click. That last pair is the whole reason this module exists rather than a
@@ -39,6 +39,16 @@ not assumed: `--check` reported `layered, click-through` and no `no-activate`. S
 module sets that flag itself, alongside the click-through ones. Losing it would mean
 the overlay stealing the game's keyboard input at the worst possible moment.
 
+**Where it sits is not cosmetic.** A monitor grab composites whatever is on screen and
+this window is always-on-top, so a panel overlapping a letterbox bar is lit pixels
+*outside* the game's picture -- and `layout.find_play_area` is a bounding box of lit
+pixels. The shipped default of (40, 40) did exactly that: the reader measured the
+picture 49 px too tall, every region landed about 24 px out, and two whole rounds were
+logged with the roster unread and no advice given. `layout.OVERLAY_SAFE` is the zone
+that is clear of both the bars and every region a reader touches, and `--check` reports
+whether the saved geometry is inside it -- which only this process can do, since the
+size is stored in CSS pixels and the zone is physical ones.
+
 Position is remembered in `overlay.json` beside the repo (gitignored -- it is a
 property of a monitor, not of the project), because a frameless click-through window
 cannot be dragged and typing coordinates every round would be miserable.
@@ -49,6 +59,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -187,6 +198,57 @@ def pin(hwnd: int) -> bool:
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, before | PINNED)
     after = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
     return all(after & bit for bit in (WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE))
+
+
+def check_placement(spot: dict, width: int, height: int, scale: float) -> str:
+    """Whether the window sits where the screen reader can still read the table.
+
+    This is the check that should have existed first. The default position put the panel in the
+    letterbox, which stretched the bounding box `layout.find_play_area` computes and shifted
+    every region by about 24 px -- so reads came back *wrong* rather than absent, and two whole
+    rounds were logged with the roster unread and no advice given.
+
+    It lives here because this is the only process that knows the DPI scale, and the scale is
+    the whole difficulty: size is stored in CSS pixels and the safe zone is physical ones, so
+    the same `overlay.json` is fine at 100% and half a panel too big at 200%.
+    """
+    from ..vision import layout
+
+    monitors = _screen_size()
+    if monitors is None:
+        return "cannot tell -- no screen size available"
+    screen_w, screen_h = monitors
+    picture_h = int(round(screen_w * 9 / 16))
+    if picture_h > screen_h:
+        return f"the screen is {screen_w}x{screen_h}, which is not 16:9 or wider -- not checked"
+    top = (screen_h - picture_h) // 2
+
+    box = layout.OVERLAY_SAFE
+    x0 = math.ceil(box.left * screen_w)
+    x1 = math.floor(box.right * screen_w)
+    y0 = math.ceil(top + box.top * picture_h)
+    y1 = math.floor(top + box.bottom * picture_h)
+
+    x, y = spot["x"], spot["y"]
+    if x >= x0 and y >= y0 and x + width <= x1 and y + height <= y1:
+        return f"inside the safe zone (x {x0}-{x1}, y {y0}-{y1})"
+    fits = f"{x1 - x0}x{y1 - y0}"
+    return (f"OUTSIDE the safe zone x {x0}-{x1}, y {y0}-{y1}. The panel is {width}x{height} "
+            f"physical at ({x},{y}). At {scale:g}x the largest that fits is "
+            f"{int((x1 - x0) / scale)}x{int((y1 - y0) / scale)} css, at x {x0}, y {y0} "
+            f"(the zone is {fits} physical). Anything in a letterbox bar makes the reader "
+            f"mis-measure the picture and read every region off by tens of pixels.")
+
+
+def _screen_size() -> tuple[int, int] | None:
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.SetProcessDPIAware()
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except Exception:
+        return None
 
 
 def check_handles(window, placing: bool) -> str:
@@ -345,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
 
             print(f"size    {spot['css_width']}x{spot['css_height']} css "
                   f"at {scale:g}x = {width}x{height} physical")
+            print(f"placing {check_placement(spot, width, height, scale)}")
             print(f"handles {check_handles(window, args.place)}")
         finally:
             if args.check:

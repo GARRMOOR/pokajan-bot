@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 
 # Anything darker than this on every channel is letterbox rather than table.
+LETTERBOX_SAMPLES = 360
 LETTERBOX_MAX = 12
 # The game's own aspect. Used as a sanity check on the trim, not to force it.
 PLAY_ASPECT = 16 / 9
@@ -73,21 +74,79 @@ class PlayArea:
         return frame[top:bottom, left:right]
 
 
+# How far the two letterbox bars may differ before the picture is not a centred one.
+#
+# A fullscreen 16:9 picture is centred, so the bars match. Measured across every capture on
+# disk: the worst disagreement is **1 pixel**, because letterboxing is integer arithmetic. This
+# is eight times that and still catches the case it exists for by a factor of six.
+#
+# What it exists for is the advisor's own overlay. A monitor grab composites whatever is on
+# screen, and the overlay is always-on-top by construction, so a panel overlapping a letterbox
+# bar is *lit pixels outside the picture* -- and this function is a bounding box of lit pixels.
+# With the overlay at its default (40, 40) the detected picture came back 49 px too tall and
+# 49 px too high, an aspect of 1.7235 against 1.7778, which the +/-5% tolerance below waves
+# through. Every region then lands about 24 px out at mid-screen: reads do not fail, they come
+# back *wrong*, as "found 6 glyphs, more than 5" on every coin box for two entire rounds.
+LETTERBOX_SKEW = 8
+
+# Where the advisor's own overlay may sit without corrupting what the reader sees.
+#
+# Two separate hazards, and the second is the one that actually bit. **Inside a letterbox bar**
+# the panel is lit pixels outside the picture, which stretches the bounding box `find_play_area`
+# computes -- that is what `LETTERBOX_SKEW` above now refuses. **Inside a read region** the panel
+# is composited over the table and read as part of it, which is worse than a misread: the reader
+# would be looking at whatever the advisor last said.
+#
+# So the panel belongs *inside the picture* and clear of every region any reader touches, with a
+# 2% margin from the picture's own edges as well -- the panel is dark, so covering the outermost
+# rows would darken them and shrink the detected area from the other direction.
+#
+# Computed rather than eyeballed: 60.7% of the picture is claimed by some region, and this is
+# the tallest band at least 900 px wide in what is left. It covers the menu button and the top
+# opponent's card backs, neither of which is read or worth looking at. The largest free
+# rectangle is actually bottom-right, and it is rejected on a ground geometry cannot see -- the
+# game draws its own Skip and Pokajan! buttons there, and a panel over them would hide the
+# controls the player needs even though clicks pass straight through.
+OVERLAY_SAFE = Box(0.020, 0.020, 0.360, 0.165)
+
+
+def play_area_problem(frame: np.ndarray) -> str | None:
+    """Why this frame is not a game picture, or None if it is. For diagnostics."""
+    return _letterbox(frame)[1]
+
+
 def find_play_area(frame: np.ndarray) -> PlayArea | None:
     """Trim the letterbox bars.
 
     Returns None when the result is not plausibly the game -- a frame captured during
-    a transition, or the wrong window entirely. Refusing here is much cheaper than
-    every region afterwards being silently offset.
-    """
-    if frame.ndim != 3 or frame.shape[0] < 16 or frame.shape[1] < 16:
-        return None
+    a transition, the wrong window entirely, or the advisor's own overlay sitting in a
+    letterbox bar. Refusing here is much cheaper than every region afterwards being
+    silently offset, which is exactly what happened before the symmetry check existed.
 
-    lit = frame.max(axis=2) > LETTERBOX_MAX
-    rows = np.where(lit.mean(axis=1) > 0.02)[0]
-    cols = np.where(lit.mean(axis=0) > 0.02)[0]
+    `play_area_problem` gives the reason, for when a caller has to explain itself.
+    """
+    return _letterbox(frame)[0]
+
+
+def _letterbox(frame: np.ndarray) -> tuple[PlayArea | None, str | None]:
+    if frame.ndim != 3 or frame.shape[0] < 16 or frame.shape[1] < 16:
+        return None, "not an image, or far too small to be a screen"
+
+    # Every row and every column is still tested -- the boundary is what this returns, and a
+    # few pixels of error there scales into every region below. What is subsampled is the
+    # pixels *within* each row and column, which only feed a 2%-lit threshold and so need a
+    # few hundred samples, not a few thousand.
+    #
+    # This runs on every poll, whether or not the frame is worth reading, and at full
+    # resolution it cost **178 ms** on a 2880x1800 grab -- more than the gate it guards and
+    # enough to hold the whole watcher near half a hertz. That is the same lesson `signature`
+    # learned: stride before the arithmetic, not after.
+    step_x = max(1, frame.shape[1] // LETTERBOX_SAMPLES)
+    step_y = max(1, frame.shape[0] // LETTERBOX_SAMPLES)
+    rows = np.where((frame[:, ::step_x].max(axis=2) > LETTERBOX_MAX).mean(axis=1) > 0.02)[0]
+    cols = np.where((frame[::step_y].max(axis=2) > LETTERBOX_MAX).mean(axis=0) > 0.02)[0]
     if rows.size == 0 or cols.size == 0:
-        return None
+        return None, "the grab is entirely dark"
 
     y, height = int(rows[0]), int(rows[-1]) - int(rows[0]) + 1
     x, width = int(cols[0]), int(cols[-1]) - int(cols[0]) + 1
@@ -95,8 +154,23 @@ def find_play_area(frame: np.ndarray) -> PlayArea | None:
     # A tolerance rather than an equality: the bars are a few pixels soft, and a JPEG
     # of them is softer still.
     if not 0.95 * PLAY_ASPECT <= area.aspect <= 1.05 * PLAY_ASPECT:
-        return None
-    return area
+        return None, (f"the lit part of the screen is {width}x{height}, an aspect of "
+                      f"{area.aspect:.3f} against 16:9's {PLAY_ASPECT:.3f}")
+
+    # And it must be *centred*, which the aspect check alone does not give. A bar that is
+    # lit at one end only stretches the box a little, and a little is enough: see
+    # `LETTERBOX_SKEW`. This is the check that names the overlay.
+    top, bottom = y, frame.shape[0] - (y + height)
+    left, right = x, frame.shape[1] - (x + width)
+    for near, far, axis in ((top, bottom, "top and bottom"), (left, right, "left and right")):
+        if abs(near - far) > LETTERBOX_SKEW:
+            return None, (
+                f"the {axis} letterbox bars are {near} and {far} pixels, which is not a "
+                f"centred picture -- something bright is sitting in a bar, and the usual "
+                f"culprit is the advisor's own overlay window. Move it inside the game's "
+                f"picture, clear of the black bars."
+            )
+    return area, None
 
 
 # --------------------------------------------------------------- the table ----
@@ -186,6 +260,172 @@ def reveal_label_row(index: int) -> Box:
     return label_row(REVEAL_LABELS, index)
 BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 
+# The meld a call scored, drawn face-up in the middle of the table during the payout.
+#
+# The only moment `scored` is observable. Those cards leave the table for good afterwards,
+# and the coin displays give the *amount* -- which pins the shape to one or two candidates
+# and no further, since a monochrome triple and a monochrome four-group both pay 840.
+#
+# **The meld is drawn toward the seat that called, so there is a box per caller.** A single box
+# was an error of exactly the kind this file warns about: the two captures that pinned it agreed
+# to within a pixel, and reading the coins off both showed the *same seat* had won each time.
+# Two samples of one condition look exactly like two samples.
+#
+# The other positions came out of one round of ordinary play rather than a screenshotting
+# session, via `reader.survey_cards` -- see `TABLE_INTERIOR`. What that measured is reassuring:
+# every meld observed is **the same size**, 0.158 wide by 0.127 tall, which is three cards of
+# 0.0527 at an aspect near 0.735. Only the position moves.
+#
+#   right   x 0.518-0.676  y 0.375-0.502   two captures, plus a live read of the cards
+#   top     x 0.472-0.630  y 0.342-0.470   three frames of one round
+#   left    x 0.323-0.481  y 0.483-0.610   one frame of one round
+#   bottom  x 0.365-0.523  y 0.526-0.665   20260809004919_1, cards read blue/pink/pink
+#
+# Symmetry with the other three predicted `bottom` at y 0.470-0.597, and the capture puts it at
+# 0.526-0.665 -- **wrong by about half a card**. That is why the prediction stayed in this
+# comment instead of going in the table: a box off by half a card does not fail, it reads a
+# neighbour's colour. Which is precisely what the first attempt at this box did, returning
+# `moona_hoshinova` correctly three times over and the colours as blue/blue/None against a true
+# blue/pink/pink. The holomem was right because all three cards were the same holomem, so
+# identification could not detect the drift and only the colours gave it away.
+#
+# `bottom` has the one edge with no slack. Its meld sits directly above the winner's payout
+# panel, so a bottom edge past about 0.671 pulls near-white panel into the frame-colour ring.
+# Swept at the shared aspect, 1435 box variants read it correctly and the working region runs
+# past every edge of the sweep except that one.
+#
+# Because the boxes overlap and a shorter box also fits inside a longer meld, `reader.read_meld`
+# returns **every** candidate rather than choosing. Choosing is `accumulate`'s job, and it has
+# what is needed: the ledger names the winning seat and the amount fixes the shape.
+#
+# It deliberately overlaps BONUS_CARD, because the meld is drawn *in front of* the bonus
+# holomem. That is worth knowing in the other direction too: during a payout the bonus card
+# region holds a meld card, and what has been stopping `_bonus` reading one is the
+# `expected=1` cross-check -- roughly 1.8 meld cards fall inside that box, so the count
+# disagrees and it refuses. Measured across three logged rounds, `bonus` never once read as
+# a different holomem. Do not relax that `expected`.
+# A meld is **right-anchored and grows leftward**, which one frame settled outright: the right
+# seat's four-card meld ran x 0.465-0.676 and its three-card melds run 0.518-0.676. Same right
+# edge, and 0.676 - 4 x 0.0527 = 0.465 to the fourth decimal.
+#
+# So a seat is a fixed right edge and a vertical band, and the box for a call follows from how
+# many cards it scored. Widening one box to hold five and letting `find_row` count was tried
+# first and does not work: the extra room reaches the deck pile and the decoy card list, which
+# merge with the meld into a single stretch and take the count with them. An exactly-sized box
+# has no room to catch anything else.
+# The anchors are the **cards' own edges**, not a box with slack around them, because the meld
+# is cut straight out of them rather than searched for. `reader.read_meld` slices `n` fixed-width
+# cards leftward from the right edge and identifies each, with no segmentation step at all.
+#
+# That is not a simplification for its own sake -- segmentation is what was failing. `find_row`
+# splits on felt, and a meld longer than three cards reaches left into the deck pile and the
+# decoy card list, which merge with it into one stretch and take the count with them. A payout
+# also rains coins across the table, which are orange enough to defeat colour-based separation
+# too. Every group call so far has been lost that way: a four-card call read as the rightmost
+# three of itself, correctly refused by `accumulate.meld_shape` as an incomplete group, and the
+# fourth card never seen.
+#
+# Slicing needs none of that. The geometry is fully determined -- a fixed right edge, a fixed
+# card width, a fixed band -- so there is nothing to detect, and what would have been a
+# segmentation error becomes a card that fails to identify, which the guards already handle.
+MELD_CARD = 0.0527                  # one card's width, identical in all four positions
+MELD_SIZES = (3, 4, 5)              # a triple, or a group -- groups only ever have 3, 4 or 5
+MELD_ANCHORS = {                    # seat -> (the fixed vertical edge, top, bottom)
+    "right": (0.676, 0.375, 0.502),
+    "top": (0.630, 0.342, 0.470),
+    "left": (0.3229, 0.483, 0.610),
+    "bottom": (0.365, 0.526, 0.665),
+}
+
+# Which edge of a meld stays put as it gets longer -- and **this is per seat, measured, and not
+# a pattern to extrapolate.** Getting it wrong is silent, so the evidence for each seat is
+# recorded here individually rather than as a rule.
+#
+# A three-card meld is the *identical three boxes* under either reading, because the two
+# candidate fixed edges are exactly three cards apart. So a seat calibrated on a triple reads
+# every triple perfectly and cuts every longer call out of bare felt, and nothing in the log
+# tells the two apart. That cost four rounds on the bottom seat, and it cost them twice over:
+# `right` and `top` were confirmed on real four-card calls, which looked like proof the rule
+# was universal. Two seats agreeing is not a rule, and a length that cannot disagree is not
+# evidence.
+#
+# `MELD_GROWS_RIGHT` is what a seat is *believed* to do. `MELD_UNSETTLED` is the seats where
+# that belief has never been checked against a four- or five-card call, and for those
+# `read_meld` cuts **both** directions and lets `accumulate` pick with the payout amount --
+# strictly more evidence than pixels, and the same reason candidates are not chosen between by
+# length either. A seat leaves `MELD_UNSETTLED` when a longer meld has actually been read there
+# and confirmed by the coins.
+#
+#   right, top  -- grow leftward. Confirmed: real four-card group calls read and matched their
+#                  amounts, and their predicted edges (0.518/0.571/0.623/0.676 and
+#                  0.472/0.525/0.577/0.630) match the survey to three decimals.
+#   bottom      -- grows rightward. **Confirmed by a read matched to its amount**: a
+#                  monochrome five-group paying 1890 read as five distinct Myth members, all
+#                  blue, with the round's bonus holomem appearing once -- and 1890 inverts to
+#                  that one cell and no other. A wrong box cannot produce five distinct members
+#                  of one group in the right colours. First found in the card survey, where
+#                  right-anchoring needed cards at 0.260-0.365 and centring needed them from
+#                  0.312 while nothing frame-coloured existed below 0.365, and content ran past
+#                  the old anchor to 0.636.
+#   left        -- grows rightward, and this took the longest to learn because fourteen left
+#                  melds were read before one of them was longer than three cards. Settled by
+#                  `left +930`, a monochrome four-group of Gen3 all in blue with the round's
+#                  bonus holomem appearing once, and 930 inverts to that one cell.
+#
+# The direction is legible from any long meld read alongside its own three-card slice, with no
+# pixels involved: growing rightward the slice is the meld's **first** three cards, growing
+# leftward it is the **last** three. Across every meld ever logged that is 2 right / 0 left for
+# `left`, 3 / 0 for `bottom`, 0 / 19 for `top` and 0 / 16 for `right` -- no contradictions in
+# either direction. Re-run that check before trusting any change here.
+#
+# `MELD_UNSETTLED` is empty now and the machinery is deliberately kept: it is how a seat gets
+# read at all while its direction is in doubt, and it cost nothing measurable (241 ms against
+# 246 ms mean read over 18 real frames), because the second cut only fires once a triple has
+# already read there.
+MELD_GROWS_RIGHT = frozenset({"bottom", "left"})
+MELD_UNSETTLED: frozenset[str] = frozenset()
+
+
+def meld_span(seat: str) -> tuple[float, float]:
+    """The x edges of this seat's *three-card* meld, which both readings agree on."""
+    edge, _, _ = MELD_ANCHORS[seat]
+    if seat in MELD_GROWS_RIGHT:
+        return edge, edge + 3 * MELD_CARD
+    return edge - 3 * MELD_CARD, edge
+
+
+def meld_growths(seat: str) -> tuple[str, ...]:
+    """Which growth directions are worth cutting for this seat, believed one first."""
+    believed = "right" if seat in MELD_GROWS_RIGHT else "left"
+    if seat not in MELD_UNSETTLED:
+        return (believed,)
+    return (believed, "left" if believed == "right" else "right")
+
+
+def meld_cards(seat: str, cards: int, *, grow: str | None = None) -> tuple[Box, ...]:
+    """One box per card of that meld, left to right."""
+    if grow is None:
+        grow = meld_growths(seat)[0]
+    left3, right3 = meld_span(seat)
+    _, top, bottom = MELD_ANCHORS[seat]
+    if grow == "right":
+        return tuple(Box(left3 + k * MELD_CARD, top, left3 + (k + 1) * MELD_CARD, bottom)
+                     for k in range(cards))
+    return tuple(Box(right3 - k * MELD_CARD, top, right3 - (k - 1) * MELD_CARD, bottom)
+                 for k in range(cards, 0, -1))
+
+
+def meld_box(seat: str, cards: int, *, grow: str | None = None) -> Box:
+    """Where a `cards`-long meld sits when `seat` called it."""
+    boxes = meld_cards(seat, cards, grow=grow)
+    _, top, bottom = MELD_ANCHORS[seat]
+    return Box(boxes[0].left, top, boxes[-1].right, bottom)
+
+# No aspect constant here on purpose. A meld card is about 152x206 on a 2880x1620 play area,
+# so roughly 0.74 -- but nothing needs the number, because the bands above give the height and
+# `MELD_CARD` gives the width directly. An aspect is only ever needed to *derive* a count from
+# a stretch of pixels, and melds are no longer counted that way.
+
 # Card rows. Deliberately loose: a discard field is one card wide at the deal and five
 # or more later, and grows away from its seat -- so each box is sized for the largest
 # case and `geometry.find_row` finds whatever is actually in it.
@@ -202,6 +442,32 @@ BONUS_CARD = Box(0.585, 0.300, 0.680, 0.520)
 # that changes the target: what it needs is the *newest* card in each field, one per
 # turn, at the end furthest from its seat -- not a segmentation of the whole pile. See
 # pokajan/vision/__init__.py.
+# Whose turn it is, which the game draws as four bars around the central oval -- one per seat,
+# on the edge nearest that seat -- with the active one lit yellow and the rest a dull green.
+#
+# Measured on two captures where the active seat is known: with `top` active the top bar reads
+# a yellow fraction of 0.38 and the other three read **exactly 0.00**; with `left` active the
+# left bar reads 0.33 and the others 0.00. Across every capture on disk the lit fractions run
+# 0.14 to 0.38 and the unlit ones 0.00 to 0.01, and no frame has ever shown two lit at once.
+#
+# `bottom` has never been caught lit -- neither capture happens to be the player's own turn --
+# but its box is placed rather than guessed: unlit it reads (45,111,17), which matches the
+# other three unlit bars (43,113,12) and not the felt around it (35,123,0), whose blue channel
+# is 0. So the box is on the bar. Whether it *lights* the same way is the one part of this that
+# a live round still has to confirm.
+TURN_INDICATORS = {
+    "top": Box(0.445, 0.278, 0.548, 0.307),
+    "bottom": Box(0.445, 0.530, 0.548, 0.556),
+    "left": Box(0.278, 0.348, 0.305, 0.482),
+    "right": Box(0.694, 0.348, 0.722, 0.482),
+}
+
+# A bar counts as lit above this share of yellow pixels. The two populations are 0.00-0.01 and
+# 0.14-0.38, so this sits in the middle of a gap fourteen times wider than the noise -- and it
+# is deliberately nearer the noise, because the cost of the two errors is not symmetric. A
+# missed turn is a frame that says nothing; a false one names the wrong player as active.
+TURN_LIT = 0.06
+
 HAND = Box(0.163, 0.753, 0.729, 0.969)
 DISCARDS = {
     "bottom": Box(0.323, 0.580, 0.660, 0.735),
@@ -209,6 +475,24 @@ DISCARDS = {
     "top": Box(0.360, 0.130, 0.630, 0.260),
     "right": Box(0.740, 0.200, 0.870, 0.680),
 }
+
+# The middle of the table: everything inside the four discard fields. Wide enough to hold a
+# meld drawn for any of the four seats, which `PAYOUT_MELD` is not -- that box is pinned by two
+# captures which turn out to be **the same caller**, so it locates a right-seat meld and nothing
+# more. Where the other three seats' melds land is unknown, and so is how a four- or five-card
+# row extends.
+#
+# This is the region `reader.survey_cards` reports the geometry of while a payout animates. Note
+# what it is *not*: a crop that may be kept. The game-over banner is drawn across the middle of
+# the table and reads "<player>'s score hit 0. Ending the game.", so a picture of this region is
+# sometimes a picture of a username. Reporting spans as text is not a weaker version of saving
+# the image -- it is the only version allowed, and it happens to be the answer anyway.
+#
+# The bottom edge reaches 0.70 rather than 0.64 because it has to clear the *lowest* meld, the
+# bottom seat's at y 0.526-0.665. At 0.64 it clipped that one, which is part of why a round
+# containing two bottom-seat calls yielded no bottom-seat geometry. The hand starts at 0.753,
+# so there is still room below.
+TABLE_INTERIOR = Box(0.25, 0.28, 0.80, 0.70)
 
 # How wide a card is relative to its height *in each region*, which is not one number.
 #

@@ -209,6 +209,53 @@ def find_row(
     )
 
 
+# How far a pixel may sit from a reference frame colour and still count as card frame.
+#
+# Looser than `classify_colour`'s 120, because that one is deciding *which* colour a card is
+# from an averaged sample, while this is deciding whether a single pixel is frame at all and
+# must not sweep in the felt or the near-white payout panels. The nearest reference pair is
+# about 190 apart, so 70 keeps the three well separated.
+FRAME_TOLERANCE = 70.0
+
+
+def frame_spans(region: np.ndarray, *, tolerance: float = FRAME_TOLERANCE,
+                min_width: int = 30, min_coverage: float = 0.04
+                ) -> tuple[tuple[float, float, float, float], ...]:
+    """Where frame-coloured things sit in a region, as (x0, x1, y0, y1) fractions.
+
+    A locator, not a reader. It answers "is there a card here, and where" without needing to
+    know what size a card is in this part of the table or which way up it is -- which is exactly
+    the question outstanding for the payout meld, whose position moves with the caller.
+
+    Keys on the card frames rather than on "not felt", because the middle of the table is full
+    of things that are not felt: the deck pile, the decoy card list, the near-white payout
+    panels and the game-over banner. Only cards are strongly blue, orange or pink. Measured on
+    the two payout captures, this lights up the meld at 0.518-0.641 and stays silent on the
+    payout frame that shows no meld.
+
+    Deliberately reports geometry and nothing else. It is the input to a layout question, and
+    the region it describes cannot be photographed -- see `layout.TABLE_INTERIOR`.
+    """
+    a = region.astype(np.float32)
+    references = np.asarray(list(FRAME_REFERENCES.values()), dtype=np.float32)
+    distance = np.stack([np.linalg.norm(a - ref, axis=-1) for ref in references])
+    mask = distance.min(axis=0) < tolerance
+    if mask.size == 0:
+        return ()
+
+    height, width = mask.shape
+    found: list[tuple[float, float, float, float]] = []
+    for x0, x1 in _runs(mask.mean(axis=0) > min_coverage, min_gap=1):
+        if x1 - x0 < min_width:
+            continue
+        rows = np.where(mask[:, x0:x1].mean(axis=1) > min_coverage)[0]
+        if rows.size == 0:
+            continue
+        found.append((x0 / width, x1 / width,
+                      float(rows[0]) / height, float(rows[-1] + 1) / height))
+    return tuple(found)
+
+
 def _runs(solid: np.ndarray, *, min_gap: int) -> list[tuple[int, int]]:
     """Stretches of True, merging any False gap narrower than `min_gap`."""
     spans: list[tuple[int, int]] = []

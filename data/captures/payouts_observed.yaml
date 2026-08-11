@@ -85,3 +85,75 @@
 
     Also the first live confirmation that a seat reaching zero ends the round: the log stops
     three records later.
+
+# --- 21 events read off the coin displays alone ---------------------------------
+#
+# Not transcribed by eye. `scripts/replay.py` runs the two complete rounds in
+# `data/games/` back through `vision/accumulate.CoinLedger`, which settles a coin
+# change only when it forms a legal payout. Both rounds close exactly:
+#
+#     20260809T224939   13 payouts   final total 4010 = 4000 + 10 minted
+#     20260810T230853    8 payouts   final total 4120 = 4000 + 120 minted
+#
+# The claim worth recording is that **every one of the 21 amounts is an entry in the
+# payout table in rules/pokajan_v1.yaml**, with no residue:
+#
+#     120  triple                          180  3-group
+#     270  3-group +1 bonus                300  4-group
+#     390  triple +3 bonus | 4-group +1    480  5-group | mono 3-group
+#     570  5-group +1 | mono 3-group +1    840  mono triple | mono 4-group
+#
+# Twenty-one independent chances for the table to be wrong, taken. It is not a
+# separate confirmation of any one cell so much as of the table's *shape* -- an
+# amount produced by a rule we had not modelled would have shown up as an amount
+# nothing pays, and none did.
+#
+# Two rules are re-confirmed in bulk rather than singly. Of the 21, eight were paid
+# by one seat alone and thirteen were split three ways evenly, which is
+# payer.when_claimed = discarder and payer.otherwise = split_others holding across
+# every hand shape in the table rather than the two that happened to be photographed.
+# And claimed_changes_amount = false survives: 120, 300 and 840 each appear both
+# claimed and split, at the same amount.
+#
+# What this evidence cannot do is name the *cards*. The amount pins the shape to one
+# or two candidates and no further -- a monochrome triple and a monochrome four-group
+# both pay 840, and the meld is only on screen during the payout animation. That is
+# the gap the payout-display reader would close, and until it exists `scored` is a
+# range: 25-30 cards in one of these rounds, 42-48 in the other.
+
+# --- the largest payout yet, and the first with its cards named ------------------
+
+- source: data/games/20260811T142007.jsonl        # record 87, read live, no screenshot
+  caller: bottom seat
+  hand_type: group
+  group_size: 5
+  monochrome: true
+  bonus_copies: 1
+  claimed: false
+  caller_gained: 1890
+  payer_final: 0
+  minted: 300
+  ended_game: true
+  meld: [mori_calliope:blue, takanashi_kiara:blue, ninomae_inanis:blue,
+         amelia_watson:blue, gawr_gura:blue]
+  note: >
+    The first five-card meld ever read, the largest amount seen, and the first event where the
+    cards and the amount confirm each other without sharing any machinery.
+
+    1890 inverts to exactly one cell -- monochrome five-group plus one bonus copy -- with no
+    competing shape, which the sparse table allows because a group carries 0 or 1 bonus copies
+    and never 3. Independently, the cards are five *distinct* Myth members, so a complete
+    five-group; all five are blue, so monochrome; and that round's bonus holomem was
+    ninomae_inanis, which appears exactly once. Shape, colour and bonus count all three agree
+    with an amount read off the coin displays by a different reader.
+
+    The four-card subset was also cut and offered, and thrown out where it should be: four of
+    Myth's five members is not a complete group. That is why read_meld returns every candidate
+    instead of choosing on pixels.
+
+    Round total closed at 4300 with 300 minted, left at 0, and the log stops -- the asymmetric
+    floor and the coin-floor ending again, at a shortfall four times larger than the 120 above.
+
+    Confirms layout.MELD_GROWS_RIGHT for the bottom seat by a *read matched to its amount*,
+    where before it rested on absence in the card survey. A wrong box cannot produce five
+    distinct members of one group in the right colours.

@@ -267,6 +267,10 @@ class AdviceHub:
 def create_app(rules: Rules, human_seat: int = 0) -> FastAPI:
     app = FastAPI(title="Pokajan")
     hub = AdviceHub()
+    # Exposed so a producer that is not a browser session can reach it. At M8 that is the screen
+    # reader (`server/live.OverlayServer`), which runs the app on a thread and publishes into
+    # this hub -- the topology the class docstring above describes, with the renderer unchanged.
+    app.state.hub = hub
     # The session the overlay follows. Several browser tabs each get their own game,
     # and the most recent one wins -- an overlay pinned to a game nobody is looking
     # at would be worse than one that follows the active tab.

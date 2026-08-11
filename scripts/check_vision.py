@@ -122,6 +122,81 @@ def _report_catalogue(templates: TemplateSet) -> None:
     print()
 
 
+# (screenshot, expected meld or None). The meld is the only moment `scored` is observable, so
+# what matters as much as reading the two payout frames is *not* reading one on the frames that
+# show no payout -- the region holds the deck's decoy list and felt the rest of the time.
+#
+# The amount is not listed here. It is derived from the cards through the payout table and
+# checked against the "N-Card <amount>" caption read by eye off each frame, which makes this
+# two independent channels agreeing rather than one transcription.
+MELDS = [
+    ("20260809004802_1", [("yuzuki_choco", "blue"), ("yuzuki_choco", "pink"),
+                          ("yuzuki_choco", "blue")], 120),
+    ("20260809004900_1", [("aki_rosenthal", "blue"), ("aki_rosenthal", "orange"),
+                          ("aki_rosenthal", "blue")], 120),
+    # A bottom-seat call, which sits in a different box entirely. The colours are the whole
+    # point of this case: the first box tried named the holomem correctly three times over and
+    # got blue/blue/None against a true blue/pink/pink, because all three cards are the same
+    # holomem and identification cannot detect a slice that has drifted by half a card.
+    ("20260809004919_1", [("moona_hoshinova", "blue"), ("moona_hoshinova", "pink"),
+                          ("moona_hoshinova", "pink")], 120),
+    ("20260809005102_1", None, None),     # a payout, but past the point the meld is shown
+    ("20260809073329_1", None, None),     # ordinary play
+    ("20260809073119_1", None, None),
+    ("20260809164608_1", None, None),
+]
+
+
+def _report_melds() -> bool:
+    """Read the face-up meld where there is one, and nothing where there is not."""
+    from pokajan.core.rules import load_default
+    from pokajan.vision.accumulate import meld_shape
+    from pokajan.vision.reader import TableReader
+
+    reader = TableReader(cards=CARDS)
+    rules = load_default()
+    good = True
+    for filename, expected, amount in MELDS:
+        path = TABLES / f"{filename}.jpg"
+        if not path.exists():
+            continue
+        with Image.open(path) as image:
+            frame = np.asarray(image.convert("RGB"))
+        area = layout.find_play_area(frame)
+        if area is None:
+            print(f"  {filename}: could not find the play area")
+            good = False
+            continue
+
+        candidates = reader.read_meld(frame, area)
+        # A shorter box fits inside a longer meld, so a group call yields a subset candidate as
+        # well. Keep only those that describe a real shape -- which is what `accumulate` does.
+        cards = ()
+        for candidate in candidates:
+            if meld_shape(candidate.cards, bonus=None) is not None:
+                cards = candidate.cards
+                break
+        got = [(card.character, card.colour) for card in cards]
+        ok = got == (expected or [])
+        good &= ok
+        if not cards:
+            print(f"  {'ok  ' if ok else 'BAD '}{filename}: no meld"
+                  + ("" if ok else f" -- expected {expected}"))
+            continue
+
+        shape = meld_shape(cards, bonus=None)
+        pays = None if shape is None else rules.payout(
+            shape.kind, group_size=shape.group_size, monochrome=shape.monochrome,
+            bonus_copies=shape.bonus_copies)
+        # The shape derived from the cards must pay what the caption said. Two channels that
+        # share no machinery: one is template matching, the other is a number on the screen.
+        good &= pays == amount
+        print(f"  {'ok  ' if ok and pays == amount else 'BAD '}{filename}: "
+              f"{' '.join(f'{who}:{col}' for who, col in got)}  -> {shape} pays {pays}"
+              + ("" if pays == amount else f", caption said {amount}"))
+    return good
+
+
 def main() -> int:
     if not CARDS.is_dir():
         print(f"no card art at {CARDS} -- nothing to check")
@@ -176,10 +251,14 @@ def main() -> int:
                   f" margin {match.margin:+.2f} colour dist {distance:.0f}")
         print()
 
+    print("melds (the only moment `scored` is observable):")
+    melds_ok = _report_melds()
+    print()
+
     if total:
         print(f"holomem {named}/{total}   colour {coloured}/{total}   "
               f"refused {refused}/{total}")
-    return 0 if total and named == total and coloured == total else 1
+    return 0 if total and named == total and coloured == total and melds_ok else 1
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pokajan.vision import layout
+from pokajan.vision import capture, layout
 from pokajan.vision.capture import (
     CROPPABLE,
     SIGNATURE_REGIONS,
@@ -154,9 +154,56 @@ def test_a_counter_that_cannot_be_read_is_its_own_state():
     """A payout display covers the pile, so the reading goes number -> None -> number. Each
     transition fires, and it must: a payout is the only moment a call's meld is observable
     before those cards leave the table for good."""
-    gate = counting_gate([30, None, None, 30], heartbeat=1e9)
+    gate = counting_gate([30, None, 30], heartbeat=1e9, urgent=lambda _: False)
 
-    assert [gate.offer(at(t)) for t in range(4)] == [True, True, False, True]
+    assert [gate.offer(at(t)) for t in range(3)] == [True, True, True]
+
+
+def test_a_covered_counter_keeps_being_read_rather_than_waiting_out_the_idle_gap():
+    """The counter is covered *because* a payout is on screen, so a refusal is the signal, not
+    a failure. It arrives on the very frame the payout starts.
+
+    Consecutive covered frames used to be one state change and then silence until the idle
+    heartbeat — and the face-up meld lives inside that silence. Measured across every logged
+    round: a meld is read on 14.4% of covered frames against 3.2% of readable ones, while the
+    gap to the next read *while covered* had a median of 2.46 s and a p90 of 5.30 s. That is
+    the idle heartbeat, in the one window that should be sprinting.
+    """
+    gate = counting_gate([None] * 4, heartbeat=5.0, urgent_heartbeat=0.4)
+
+    assert [gate.offer(at(t)) for t in (0.0, 0.3, 0.4, 0.9)] == [True, False, True, True]
+
+
+def test_urgency_can_only_ever_make_the_gate_fire_sooner():
+    """`urgent_heartbeat` is a ceiling on the wait, not a replacement for it.
+
+    Written plainly it is `urgent_heartbeat if pressing else heartbeat`, and then a caller who
+    shortens `heartbeat` below it — which `scripts/capture.py` does, on `ledger.pending` — makes
+    the *payout* frames the slow ones. Urgency that slows things down is worse than none, and it
+    would show up as the meld window sampling less often the more certain we were about it.
+    """
+    gate = counting_gate([None] * 3, heartbeat=0.1, urgent_heartbeat=5.0)
+
+    assert [gate.offer(at(t)) for t in (0.0, 0.05, 0.1)] == [True, False, True]
+
+
+def test_the_sprint_is_decided_by_the_frame_in_hand_not_by_a_later_verdict():
+    """This is the whole point, and the reason the previous attempt bought nothing.
+
+    That version left the caller to drop the heartbeat once `CoinLedger.pending` reported an
+    unexplained coin change. Noticing a coin change means having already sampled it, and the
+    meld and the coin change happen together — so the sprint started, at best, after the thing
+    it was meant to catch. A five-card left-seat group was lost exactly there: one frame
+    sampled in its whole payout window, and it showed bare felt.
+
+    So the gate must decide from the key it just computed, with nothing told to it.
+    """
+    gate = counting_gate([None, None], heartbeat=1e9, urgent_heartbeat=0.4)
+    gate.offer(at(0.0))
+
+    # No caller has touched `heartbeat`; it is still the idle value it was built with.
+    assert gate.heartbeat == 1e9
+    assert gate.offer(at(0.5)) is True
 
 
 def test_the_heartbeat_reads_even_when_the_count_holds():
@@ -275,6 +322,153 @@ def test_a_missing_store_is_empty_rather_than_an_error(tmp_path):
 
     assert store.files() == [] and store.total_bytes() == 0
     assert store.purge() == (0, 0)
+
+
+# ------------------------------------------------- the overlay's own pixels ----
+#
+# A monitor grab composites whatever is on screen, and the advisor's overlay is always-on-top
+# by construction. Two rounds were watched and logged entirely wrong before these existed.
+
+def screen(width=2880, height=1800):
+    """A full screen with a centred 16:9 picture on it, letterbox bars and all."""
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    picture = int(round(width * 9 / 16))
+    top = (height - picture) // 2
+    frame[top:top + picture] = FELT
+    return frame, top
+
+
+PANEL = (18, 21, 29)          # web/overlay.html's .panel background, #12151d
+
+
+def test_a_panel_in_the_letterbox_is_refused_rather_than_silently_shifting_everything():
+    """The bug this whole check exists for, reproduced.
+
+    With the overlay at its shipped default of (40, 40) the detected picture came back 49 px
+    too tall and 49 px too high -- an aspect of 1.7235 against 16:9's 1.7778, which the +/-5%
+    tolerance waves straight through. Regions then land about 24 px out at mid-screen, so reads
+    do not fail, they come back *wrong*: "found 6 glyphs, more than 5" on every coin box, the
+    roster unread on all 469 frames of a round, and advice that never arrived.
+    """
+    frame, top = screen()
+    assert layout.find_play_area(frame) is not None, "the fixture must be a valid picture first"
+    frame[40:40 + 190, 40:40 + 520] = PANEL
+
+    assert layout.find_play_area(frame) is None
+    why = layout.play_area_problem(frame)
+    assert "letterbox" in why and "overlay" in why
+
+
+def test_a_panel_inside_the_picture_changes_nothing():
+    """Which is why the answer is to move it *in*, not out. Inside the picture the bounding box
+    of lit pixels is already the picture, so the panel cannot move it."""
+    frame, top = screen()
+    before = layout.find_play_area(frame)
+    box = layout.OVERLAY_SAFE
+    left, top_y, right, bottom = box.pixels(before)
+    frame[top_y:bottom, left:right] = PANEL
+
+    assert layout.find_play_area(frame) == before
+
+
+def test_the_safe_zone_touches_nothing_any_reader_reads():
+    """Inside a read region the panel is composited over the table and read as part of it --
+    which is worse than a misread, because the reader would be looking at whatever the advisor
+    last said. A feedback loop, not an error."""
+    box = layout.OVERLAY_SAFE
+    regions = {name: getattr(layout, name) for name in
+               ("DECK", "DECK_COUNTER", "GROUP_PANEL", "GROUP_LABELS", "REVEAL_PANEL",
+                "REVEAL_LABELS", "BONUS_CARD", "HAND", "TABLE_INTERIOR")}
+    for group in (layout.DISCARDS, layout.COINS, layout.RANKS, layout.TURN_INDICATORS):
+        regions.update({f"{seat}{id(group)}": value for seat, value in group.items()})
+    for seat in layout.SEAT_ORDER:
+        for size in layout.MELD_SIZES:
+            regions[f"meld{seat}{size}"] = layout.meld_box(seat, size)
+
+    for name, region in regions.items():
+        apart = (region.right <= box.left or region.left >= box.right
+                 or region.bottom <= box.top or region.top >= box.bottom)
+        assert apart, f"the overlay's safe zone overlaps {name}"
+
+    # And clear of the picture's own edges, because the panel is dark: covering the outermost
+    # rows would darken them and shrink the detected area from the other direction.
+    assert box.left >= 0.02 and box.top >= 0.02
+    assert box.right <= 0.98 and box.bottom <= 0.98
+
+
+def test_a_centred_picture_survives_the_symmetry_check_at_any_size():
+    """The check must not start refusing real screens. Measured across every capture on disk the
+    two bars differ by at most 1 px, because letterboxing is integer arithmetic."""
+    for width, height in ((2880, 1800), (1920, 1080), (3840, 2160), (1366, 768)):
+        frame, _ = screen(width, height)
+        assert layout.find_play_area(frame) is not None, f"{width}x{height} was refused"
+
+
+def test_keeping_a_crop_walks_the_directory_once(tmp_path, monkeypatch):
+    """The regression this guards cost more than everything it was measuring.
+
+    `keep` evicts, eviction needs a total, and the natural spelling -- `files()` walking the
+    directory and `total_bytes()` walking it again -- made that two full `stat` passes per
+    crop. Against a full store that measured 131 ms and 193 ms, so the four crops a frame kept
+    spent 1.30 s choosing what to delete while the read they delayed cost 285 ms. Counting the
+    scans is the only way to see that from a test: it is invisible in the file listing, which
+    is correct either way, and invisible on a `tmp_path` holding three files.
+    """
+    scans = []
+    real = capture.os.scandir
+    monkeypatch.setattr(capture.os, "scandir",
+                        lambda path: scans.append(path) or real(path))
+    store = PendingStore(directory=tmp_path, max_bytes=10 * 1024 * 1024)
+    crop = grab(1).crop(layout.DISCARDS["left"])
+    store.keep("discards_left", crop, stamp="t0")
+    scans.clear()
+
+    store.keep("discards_left", crop, stamp="t1")
+
+    assert len(scans) == 1, f"{len(scans)} directory scans to keep one crop"
+
+
+def test_a_crop_is_not_compressed_harder_than_the_read_it_delays(tmp_path, monkeypatch):
+    """`optimize=True` cost 171-247 ms per discard crop against 25-68 ms plain -- four crops
+    spending 0.75 s of a frame's budget -- and bought 9% fewer bytes, which buys no disk
+    because `max_bytes` caps the store either way.
+
+    Asserted on the call rather than the file size, having tried both. A timing assertion is
+    flaky on a laptop, and a size assertion does not discriminate: these fixtures are random
+    noise, which PNG cannot compress, so optimised and plain came out within 0.02% of each
+    other and the test passed whatever the code did. The 9% is only there on real card art.
+    """
+    from PIL import Image
+
+    saved: list[dict] = []
+    real = Image.Image.save
+    monkeypatch.setattr(Image.Image, "save",
+                        lambda self, path, **kw: saved.append(kw) or real(self, path, **kw))
+    store = PendingStore(directory=tmp_path, max_bytes=10 * 1024 * 1024)
+
+    store.keep("discards_left", grab(1).crop(layout.DISCARDS["left"]), stamp="t0")
+
+    assert saved and not saved[0].get("optimize")
+
+
+# ------------------------------------------------------- when crops are due ----
+
+def test_crops_are_never_kept_while_a_payout_is_in_flight():
+    """However overdue they are. A face-up meld is on screen for a second or two and is the
+    only moment `scored` is observable at all, so anything competing for that frame loses --
+    and crops feed a reader that does not exist yet."""
+    assert not capture.crops_due(pending=True, at=1_000.0, last=0.0)
+
+
+def test_crops_are_kept_on_a_clock_rather_than_every_frame():
+    """Every read frame was 1221 near-duplicates and a full 200 MB cap, which is what made
+    eviction expensive. The unbuilt discard reader needs one sample a turn, about ten
+    seconds."""
+    interval = capture.CROP_INTERVAL
+
+    assert capture.crops_due(pending=False, at=interval, last=0.0)
+    assert not capture.crops_due(pending=False, at=interval - 0.01, last=0.0)
+    assert capture.CROP_INTERVAL >= 10.0
 
 
 # ------------------------------------------------------- waiting for the game ----

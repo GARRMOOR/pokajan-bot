@@ -27,6 +27,7 @@ import itertools
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 from PIL import Image
@@ -63,6 +64,27 @@ QUERY_HALF_H = ((1 - INNER_BOTTOM) - INNER_TOP) / 2
 MIN_SCORE = 0.45
 MIN_MARGIN = 0.12
 
+# A second way past the score floor, for cards that are on screen but not well lit.
+#
+# `MIN_SCORE` cannot simply be lowered, and the reason is specific rather than cautious: the
+# left and bottom meld boxes overlap permanent table furniture that matches `tokoyami_towa` at
+# 0.30 and `kaela_kovalskia` at 0.42 -- identical scores on frames minutes apart, which is what
+# a fixture looks like. A floor under 0.45 starts naming furniture.
+#
+# But the payout animation rains coins across the table, and a meld card seen through that
+# scores far below the 0.53-0.78 that the same art manages on a saved screenshot. Two such
+# cards were refused in one round -- `kobo_kanaeru` 0.37 and `amelia_watson` 0.42 -- each
+# giving the *same* answer on two consecutive frames.
+#
+# The margin separates the two cases where the score cannot: measured across 49 meld-slot
+# refusals in that round, furniture ran +0.00 to +0.11 and those cards +0.19 to +0.24, with
+# nothing in between. That is also what the labelled corpus says -- correct reads +0.22 to
+# +0.42, and its one genuine failure at +0.00 -- and what this module's docstring has claimed
+# all along. `MIN_FLOOR` keeps a hard bottom, because a decisive margin over a field that
+# matches nothing is still nothing.
+CONFIDENT_MARGIN = 0.18
+MIN_FLOOR = 0.35
+
 # data/cards/shirakami_fubuki_GAMERS_COLORLESS.jpg -> shirakami_fubuki
 _FILENAME = re.compile(r"^(?P<cid>.+?)(?:_[A-Z0-9]+)*_COLORLESS$")
 
@@ -76,6 +98,11 @@ class Match:
     margin: float                # over the best *different* holomem
     runner_up: str | None
     reason: str = ""
+    # The top-ranked holomem whether or not it was accepted. Kept because a refusal is not
+    # the same as no information: the bonus card does not change within a round, so dozens of
+    # sub-threshold reads that all name the same holomem are evidence no single frame could be.
+    # `accumulate.RoundBelief` votes on exactly that. Never use it as an answer on its own.
+    best: str | None = None
 
     @property
     def confident(self) -> bool:
@@ -165,8 +192,15 @@ class TemplateSet:
         return tuple(c for c in roster.characters if c not in self._templates)
 
     # ------------------------------------------------------------ matching --
-    def identify(self, card: np.ndarray) -> Match:
+    def identify(self, card: np.ndarray, *, among: Iterable[str] | None = None) -> Match:
         """Which holomem this crop shows, or a refusal.
+
+        `among` restricts the field to the holomem actually in this round, which the roster
+        gives for free and which can only help: a card on the table is one of those fifteen or
+        so, never one of the other forty-odd in the catalogue. Measured on a real frame, it
+        leaves every answer unchanged and every margin equal or better -- `tokoyami_towa` from
+        +0.34 to +0.49, `ookami_mio` from +0.33 to +0.42 -- while the one genuinely bad crop
+        stays refused at +0.00, so it widens the gap without rescuing anything it should not.
 
         Ranked by normalised cross-correlation, and the decision is driven by the
         **margin over the best different holomem** rather than by the top score.
@@ -189,25 +223,38 @@ class TemplateSet:
         # (variants x templates) correlations, reduced to the best variant per template
         # and then to the best template per holomem.
         per_template = (queries @ self._matrix.T).max(axis=0)
+        allowed = None if among is None else set(among)
         per_character: dict[str, float] = {}
         for owner, value in zip(self._owners, per_template):
+            if allowed is not None and owner not in allowed:
+                continue
             if value > per_character.get(owner, -2.0):
                 per_character[owner] = float(value)
+        if not per_character:
+            return Match(None, 0.0, 0.0, None,
+                         "no art for any holomem in this round's roster")
 
         best = sorted(((v, k) for k, v in per_character.items()), reverse=True)
         score, character = best[0]
         runner_up = best[1][1] if len(best) > 1 else None
         margin = score - best[1][0] if len(best) > 1 else score
 
-        if score < MIN_SCORE:
+        # The margin decides when the score is merely poor rather than absent. Putting it in
+        # the refusal message came first and is what made this visible at all: a round logged
+        # "amelia_watson only scored 0.42" 68 times, and there was no way to tell a correct
+        # read sitting under the floor from a coin-flip until the margin sat beside it.
+        # Measured on real cards the two populations separate with a clear gap -- correct
+        # reads +0.22 to +0.49, non-cards and furniture +0.00 to +0.11.
+        confident = score >= MIN_FLOOR and margin >= CONFIDENT_MARGIN
+        if score < MIN_SCORE and not confident:
             return Match(None, score, margin, runner_up,
                          f"best match {character} only scored {score:.2f}, "
-                         f"under {MIN_SCORE}")
+                         f"under {MIN_SCORE} (margin {margin:+.2f})", best=character)
         if margin < MIN_MARGIN:
             return Match(None, score, margin, runner_up,
                          f"{character} and {runner_up} are {margin:.2f} apart, "
-                         f"under {MIN_MARGIN} -- probably neither")
-        return Match(character, score, margin, runner_up)
+                         f"under {MIN_MARGIN} -- probably neither", best=character)
+        return Match(character, score, margin, runner_up, best=character)
 
 
 # ------------------------------------------------------------- comparison ----

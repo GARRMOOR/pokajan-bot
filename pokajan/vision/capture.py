@@ -8,9 +8,16 @@ the monitor, let `layout.find_play_area` trim the letterbox, and refuse anything
 plausibly the game. Read-only, and that is the whole scope of M8 -- nothing here or anywhere
 downstream sends input to the game.
 
-**Deciding when a frame is worth reading.** A full read costs 153 ms and a grab 40 ms, so
-most polls must be cheap. `TurnGate` fires on the *deck counter's value*, which costs 1.7 ms
-and is the game's own turn clock -- it falls by one on every draw.
+**Deciding when a frame is worth reading.** A full read costs 285 ms and a grab 71 ms, both
+measured live, so most polls must be cheap. `TurnGate` fires on the *deck counter's value*,
+which costs 1.7 ms and is the game's own turn clock -- it falls by one on every draw.
+
+Those two numbers are the whole poll budget and neither was the problem. A live round polled
+once every 2.9 s and read once every 4.4 s, and the difference was `PendingStore` below:
+compressing four crops and scanning a full directory twice per crop cost **2 s a frame**,
+seven times the read it was delaying. Both are fixed, and crops are now rationed by
+`crops_due`. The lesson is the one this file keeps relearning -- instrument the loop, do not
+reason about it.
 
 An earlier version waited for the table to hold still, on the reasoning that a settled table
 is a safe one. It does not work and the measurement is worth keeping: over 45 seconds of real
@@ -47,6 +54,7 @@ overlay's placement is already saved in `overlay.json`, so the first is checkabl
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,6 +168,17 @@ class MonitorSource:
         self._screen = screen
         self._monitor = monitor
         self._chosen: int | None = monitor
+        # Where a poll's time actually goes. Instrumented rather than reasoned about, because
+        # the reasoning was wrong by a factor of thirty: this module's notes claimed "about
+        # 40 ms of grab", and a live round measured **2.2 seconds between consecutive frames**
+        # at best. That rate is what decides how often a payout meld -- on screen for a second
+        # or two, and the only moment `scored` is observable -- gets seen at all.
+        self.timing: dict[str, float] = {"grab": 0.0, "convert": 0.0, "grabs": 0.0}
+        # Why the last grab was not a game picture. "Not on screen" is the ordinary reason and
+        # needs no explanation, but "your overlay is sitting in the letterbox" is indispensable
+        # and indistinguishable from it without this -- two rounds were watched and logged
+        # entirely wrong before the check that produces this message existed.
+        self.last_problem: str | None = None
 
     def close(self) -> None:
         self._screen.close()
@@ -181,10 +200,16 @@ class MonitorSource:
         return self._chosen
 
     def _raw(self, index: int) -> np.ndarray:
+        started = time.perf_counter()
         shot = self._screen.grab(self._screen.monitors[index])
+        taken = time.perf_counter()
         # mss hands back BGRA. Drop alpha and reverse, rather than converting through PIL:
         # this runs on every grab and a megapixel round trip is not free.
-        return np.asarray(shot, dtype=np.uint8)[:, :, 2::-1]
+        pixels = np.asarray(shot, dtype=np.uint8)[:, :, 2::-1]
+        self.timing["grab"] += taken - started
+        self.timing["convert"] += time.perf_counter() - taken
+        self.timing["grabs"] += 1
+        return pixels
 
     def find_game(self) -> int | None:
         """Which monitor is showing the game, or None if none is right now.
@@ -235,12 +260,15 @@ class MonitorSource:
         else:
             candidates = list(range(1, len(self._screen.monitors)))
 
+        problem: str | None = None
         for index in candidates:
             pixels = self._raw(index)
-            area = layout.find_play_area(pixels)
+            area, problem = layout._letterbox(pixels)
             if area is not None:
                 self._chosen = index
+                self.last_problem = None
                 return Grab(pixels=pixels, area=area, captured_at=time.time())
+        self.last_problem = problem
         return None
 
 
@@ -301,6 +329,55 @@ def region_deltas(before: np.ndarray, after: np.ndarray,
     return sorted(worst, key=lambda pair: -pair[1])
 
 
+# How long the gate will sit without firing when the deck counter has not moved.
+#
+# Two values, because a payout is the one moment worth watching closely and the deck counter
+# goes *blind* exactly then: the payout panels cover the pile, so the key reads None for the
+# whole animation. That is a single distinct key, so the gate fires once and then waits out the
+# idle heartbeat -- and the face-up meld, the only moment `scored` is observable at all, lives
+# inside that gap. Measured: a five-card group call was watched through a round and the only
+# frame read during its payout showed the table entirely covered.
+#
+# `TurnGate` applies `PAYOUT_HEARTBEAT` itself, the moment the counter refuses, rather than
+# waiting to be told. Leaving it to the caller -- which dropped the heartbeat once
+# `accumulate.CoinLedger.pending` reported an unexplained coin change -- reacts one signal too
+# late, because noticing the coin change means having already sampled it. Measured, that
+# version never sprinted at all: the gap to the next read while the counter was covered had a
+# median of 2.46 s and a p90 of 5.30 s, which is this idle value rather than the one below.
+#
+# At a 0.3 s poll and about 250 ms of read that is roughly every other poll, for the few
+# seconds a payout lasts, which is affordable in a way that polling that hard all round would
+# not be: the counter refuses on about a quarter of frames.
+IDLE_HEARTBEAT = 5.0
+PAYOUT_HEARTBEAT = 0.4
+
+# How often crops are worth keeping, and the answer is *far* less often than every frame.
+#
+# `PAYOUT_HEARTBEAT` above bought nothing on the round it was written for, and this is why. It
+# drops the gate's idle wait to 0.4 s, but the loop could not come round in under 3.5 s: a read
+# frame kept four crops, and those four crops cost 0.75 s of PNG compression plus 1.30 s of
+# directory scanning -- **2 s against the 285 ms read they were delaying**. Both halves are
+# fixed above; this is the third fix, and the one that would have mattered even without them.
+#
+# Crops feed a discard reader that does not exist yet, and that reader needs the newest card in
+# each field about once a turn -- roughly ten seconds. Keeping them every read frame banked
+# 1221 near-duplicates and filled the 200 MB cap, which is what made eviction expensive in the
+# first place. So: at most one set per `CROP_INTERVAL`, and none at all while a payout is in
+# flight, because that is the one moment the sampling rate is the whole product.
+CROP_INTERVAL = 15.0
+
+
+def crops_due(*, pending: bool, at: float, last: float,
+              interval: float = CROP_INTERVAL) -> bool:
+    """Whether this frame should spend time on crops, given a payout may be in flight.
+
+    `pending` is `accumulate.CoinLedger.pending` -- a coin change seen and not yet explained,
+    which is exactly when a face-up meld is on the table and `scored` is observable at all.
+    Crops lose to that unconditionally, however long it has been since the last set.
+    """
+    return not pending and at - last >= interval
+
+
 _UNSET = object()
 
 
@@ -330,17 +407,39 @@ class TurnGate:
     `heartbeat` forces a read even when the key has not changed, so nothing depends on the
     counter alone: a round that ends on deck exhaustion stops moving it, and coins keep
     changing during a payout while it stays unreadable.
+
+    **And a key that refuses is the payout signal itself, which is why `urgent` exists.** The
+    counter is covered because the payout panels are over the pile, so a refusal is not a
+    failure to interpret -- it is the one moment worth watching closely, arriving on the very
+    frame it starts. Measured across every logged round, a meld is read on **14.4% of frames
+    whose deck counter refused against 3.2% of frames where it read**.
+
+    An earlier version left this to the caller, which dropped the heartbeat once
+    `accumulate.CoinLedger.pending` said a coin change was outstanding. That is a strictly
+    later signal and it showed: the gap to the next read *while the counter was covered* ran to
+    a median of 2.46 s and a p90 of 5.30 s, which is the idle heartbeat, not the payout one.
+    Seeing the coin change requires having already sampled it, and the meld and the coin change
+    happen together -- so the sprint began, at best, after the thing it was meant to catch. A
+    five-card left-seat group was lost in exactly that gap: one frame sampled inside its whole
+    payout window, showing bare felt.
     """
 
     key: Callable[[Grab], object]
-    heartbeat: float = 5.0
+    heartbeat: float = IDLE_HEARTBEAT
+    urgent_heartbeat: float = PAYOUT_HEARTBEAT
+    # What a key looks like when the moment is worth watching closely. None by default means
+    # "the deck counter refused", i.e. something is covering the pile. Injectable so a test can
+    # say so without painting a payout panel.
+    urgent: Callable[[object], bool] | None = None
     _key: object = _UNSET
     _fired_at: float = 0.0
 
     def offer(self, grab: Grab) -> bool:
         """True when this frame should be read. Advances the gate either way."""
         current = self.key(grab)
-        stale = grab.captured_at - self._fired_at >= self.heartbeat
+        pressing = self.urgent(current) if self.urgent else current is None
+        wait = min(self.urgent_heartbeat, self.heartbeat) if pressing else self.heartbeat
+        stale = grab.captured_at - self._fired_at >= wait
         if current != self._key or stale:
             self._key = current
             self._fired_at = grab.captured_at
@@ -389,26 +488,52 @@ class PendingStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         suffix = f"_{note}" if note else ""
         path = self.directory / f"{stamp}_{region}{suffix}.png"
-        Image.fromarray(np.asarray(crop, dtype=np.uint8)).save(path, optimize=True)
+        # Deliberately *not* `optimize=True`, which was here and is the wrong trade despite
+        # disk being the scarce resource on this machine. Measured on real discard fields it
+        # writes 9% fewer bytes for 171-247 ms per crop against 25-68 ms plain -- four crops
+        # spending 0.75 s of a frame's budget. And the 9% buys no disk at all: `max_bytes` is
+        # a hard cap that eviction enforces either way, so smaller files mean about 9% more
+        # crops retained, not a smaller store. Time is what is actually scarce here.
+        Image.fromarray(np.asarray(crop, dtype=np.uint8)).save(path)
         self._evict(spare=path)
         return path
 
     # ----------------------------------------------------------- housekeeping --
-    def files(self) -> list[Path]:
+    def _entries(self) -> list[tuple[Path, int]]:
+        """Every kept file with its size, oldest first, from **one** directory scan.
+
+        One scan, because the obvious spelling of this class was quadratic in disguise and it
+        showed up in the one thing the whole module exists to do. `keep` evicts, eviction
+        needs a total, and `files()` and `total_bytes()` each walked the directory and
+        `stat`ed every entry: measured 131 ms and 193 ms against a full 1221-file store, so
+        the four crops kept per frame spent **1.30 s** deciding what to delete. A full read of
+        the table costs 285 ms. `os.scandir` carries the size along with the name, so the
+        sizes come free and the second walk is gone.
+        """
         if not self.directory.is_dir():
             return []
-        return sorted((p for p in self.directory.iterdir() if p.is_file()),
-                      key=lambda p: (p.stat().st_mtime, p.name))
+        found: list[tuple[Path, int, float]] = []
+        with os.scandir(self.directory) as scan:
+            for entry in scan:
+                if not entry.is_file():
+                    continue
+                info = entry.stat()
+                found.append((Path(entry.path), info.st_size, info.st_mtime))
+        found.sort(key=lambda item: (item[2], item[0].name))
+        return [(path, size) for path, size, _ in found]
+
+    def files(self) -> list[Path]:
+        return [path for path, _ in self._entries()]
 
     def total_bytes(self) -> int:
-        return sum(p.stat().st_size for p in self.files())
+        return sum(size for _, size in self._entries())
 
     def purge(self) -> tuple[int, int]:
         """Delete everything. Returns (files removed, bytes freed)."""
         removed = freed = 0
-        for path in self.files():
-            freed += path.stat().st_size
+        for path, size in self._entries():
             path.unlink()
+            freed += size
             removed += 1
         return removed, freed
 
@@ -420,12 +545,14 @@ class PendingStore:
         cap exists to bound *accumulation*, and a single crop that exceeds it is a
         misconfiguration to notice rather than a request to silently ignore.
         """
-        files = [p for p in self.files() if p != spare]
-        total = self.total_bytes()
-        for path in files:
+        entries = self._entries()
+        total = sum(size for _, size in entries)
+        for path, size in entries:
             if total <= self.max_bytes:
                 return
-            total -= path.stat().st_size
+            if path == spare:
+                continue
+            total -= size
             path.unlink()
 
 
@@ -444,9 +571,10 @@ def frames(source: MonitorSource, gate: TurnGate, *, interval: float = 0.3,
     only when the answer *changes*, so a caller can say "found it" and "gone" without
     printing either several times a second.
 
-    A poll costs about 40 ms of grab plus 1 ms of signature on a 2880x1800 monitor, so the
-    0.3 s default spends roughly a seventh of one core. That matters: Pokajan gives about ten
-    seconds a turn and the watcher must not compete with the game it is advising on.
+    A poll costs 71 ms of grab plus 54 ms of `find_play_area` plus 2 ms for the gate's deck
+    read, measured live, so the 0.3 s default spends roughly a third of one core. That
+    matters: Pokajan gives about ten seconds a turn and the watcher must not compete with the
+    game it is advising on.
     """
     present: bool | None = None
     while not (until and until()):

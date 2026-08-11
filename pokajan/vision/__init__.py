@@ -73,7 +73,10 @@ depends on:
 * **Discards vanish from view two ways**: a claimed card leaves with the meld, and
   each seat's discard pile stacks once it grows, hiding the older cards. Neither
   removes them from the game. So `table` and `scored` must still be accumulated by
-  watching continuously -- the reader cannot join a round in progress.
+  watching continuously -- the reader cannot join a round in progress. `accumulate.py`
+  is where that lives, and it enforces the "cannot join" part rather than merely
+  documenting it: a coin change it has no legal payout for is announced as a loss of
+  track, which is exactly what a round joined halfway looks like from the inside.
 
   The stacking was captured twice in one round, two minutes apart, and the geometry
   is worth having: a seat's discards run *away* from that seat, newest at the far
@@ -101,9 +104,24 @@ depends on:
   slicing cuts across cards rather than between them -- aspects of 1.26 and 1.54 where
   a clean sideways card gives 1.395. Rectifying that is real work, and it buys the
   wrong thing: the old cards in the pile are already accumulated, and the buried ones
-  are unreadable regardless. What a continuous reader needs is **the single newest
-  card in each field, once per turn**, at the end furthest from its seat -- which is
-  the un-stacked, unambiguous end.
+  are unreadable regardless.
+
+  That argument used to end "what a continuous reader needs is the single newest card
+  in each field, once per turn, at the un-stacked end". **That is wrong, and the way
+  it is wrong is worth keeping.** Once per turn requires seeing every turn, and over
+  the two complete rounds in `data/games/` the deck counter fell one at a time on only
+  17 of 81 draws and 11 of 59 -- about a fifth. Four turns in five pass without an
+  individual observation, so an appended history would be missing most of the cards it
+  claimed to hold and, worse, would not know which. The reasoning above was sound and
+  its conclusion still did not survive contact with a stopwatch.
+
+  What replaced it is in `accumulate.py` and needs no per-turn continuity at all. Every
+  single view of a discard field is a true subset of what that seat has thrown, so the
+  most of a card ever seen at once is a **lower bound**, merged by `max`. A bound that
+  is short carries less information rather than false information, which is all the
+  belief needs -- and the table's *size* comes from somewhere else entirely, by card
+  conservation against the deck counter, exactly through the seats and turns this
+  cannot see.
 
 * **`geometry.CARD_ASPECT` is the aspect of a card in YOUR HAND, and does not
   transfer to the other seats.** Your hand sits closest to the camera; everything

@@ -20,7 +20,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from pokajan.vision.layout import find_play_area
 from pokajan.vision.geometry import (
+    frame_spans,
     CARD_ASPECT,
     FRAME_REFERENCES,
     classify_colour,
@@ -28,7 +30,10 @@ from pokajan.vision.geometry import (
     frame_colour,
 )
 from pokajan.vision.templates import (
+    CONFIDENT_MARGIN,
+    MIN_FLOOR,
     MIN_MARGIN,
+    MIN_SCORE,
     TemplateSet,
     character_from_filename,
     prepare,
@@ -336,6 +341,75 @@ def test_a_holomem_with_no_art_is_refused_rather_than_guessed():
 
     assert not found.confident
     assert found.character is None
+
+
+def veiled(seed: int, alpha: float, colour: str = "orange") -> np.ndarray:
+    """A card seen through noise, the way a meld is seen through a payout animation.
+
+    The payout rains coins across the table, so the same art that scores 0.53-0.78 on a saved
+    screenshot scores 0.37-0.44 live. This is the only way to reach that band in a test: the
+    real corpus has no example, because a card that dim is exactly what used to be thrown away.
+    """
+    rng = np.random.default_rng(0)
+    art = card(seed, colour).astype(np.float32)
+    veil = rng.integers(0, 256, art.shape).astype(np.float32)
+    return np.clip(art * (1 - alpha) + veil * alpha, 0, 255).astype(np.uint8)
+
+
+def test_a_dim_card_that_stands_clearly_apart_is_named():
+    """The score floor cannot simply be lowered -- the left and bottom meld boxes overlap
+    permanent furniture matching at 0.30 and 0.42 -- so a decisive margin is the second way
+    past it. Measured across 64 meld-slot refusals: furniture +0.00 to +0.11, real cards
+    +0.19 to +0.24, nothing in between."""
+    found = catalogue(range(8)).identify(veiled(3, 0.75))
+
+    assert found.score < MIN_SCORE, "the point of this test is a sub-floor score"
+    assert found.margin >= CONFIDENT_MARGIN
+    assert found.character == "holomem_3" and found.confident
+
+
+def test_a_card_too_dim_to_match_is_refused_however_decisive_the_margin():
+    """`MIN_FLOOR` is the backstop. A margin is a ratio: as a card fades, its score and its
+    runner-up's fall together, so the margin can stay respectable long after the best match
+    has stopped meaning anything. Without a floor, noise with a clear winner reads as a card
+    -- and a wrong card written into `scored` is the one failure this layer exists to
+    prevent."""
+    found = catalogue(range(8)).identify(veiled(3, 0.80))
+
+    assert found.margin >= CONFIDENT_MARGIN, "margin alone would have accepted this"
+    assert found.score < MIN_FLOOR
+    assert found.character is None and not found.confident
+
+
+def test_a_respectable_score_with_an_indecisive_margin_is_still_refused():
+    """The gap the whole rule lives in, and the one a mutation walked straight through.
+
+    Score 0.43 clears `MIN_FLOOR` and margin +0.15 clears `MIN_MARGIN`, so dropping the margin
+    from the confident test lets this through -- and this is not a hypothetical shape. The
+    bottom meld box overlaps furniture that matches `kaela_kovalskia` at exactly 0.42 on
+    frames minutes apart. What says it is not a card is that nothing stands apart from the
+    field, which is why `CONFIDENT_MARGIN` sits above `MIN_MARGIN` rather than replacing it.
+    """
+    rng = np.random.default_rng(0)
+    art = card(3, "orange").astype(np.float32)
+    rival = card(4, "orange").astype(np.float32)
+    veil = rng.integers(0, 256, art.shape).astype(np.float32)
+    muddled = np.clip((art * 0.62 + rival * 0.38) * 0.4 + veil * 0.6, 0, 255).astype(np.uint8)
+
+    found = catalogue(range(8)).identify(muddled)
+
+    assert MIN_FLOOR <= found.score < MIN_SCORE, "must sit in the band the rule governs"
+    assert MIN_MARGIN <= found.margin < CONFIDENT_MARGIN
+    assert found.character is None and not found.confident
+
+
+def test_furniture_under_the_floor_is_still_refused():
+    """The case the margin gate is protecting. Flat grey is not a card, and the thing that
+    says so is that nothing stands apart -- not that it scores badly."""
+    found = catalogue(range(8)).identify(np.full((CARD_H, CARD_W, 3), 128, dtype=np.uint8))
+
+    assert found.margin < CONFIDENT_MARGIN
+    assert found.character is None
     assert found.reason
 
 
@@ -472,3 +546,115 @@ def test_a_vertical_row_is_split_and_turned_upright():
     for one in row.cards:
         upright = one.shape[1] / one.shape[0]
         assert upright == pytest.approx(CARD_ASPECT, abs=0.05), "not turned upright"
+
+
+# ------------------------------------------------------------- locating cards ---
+#
+# `frame_spans` answers "is there a card here, and where" without being told what size a card
+# is in this part of the table. It exists for one open question: the payout meld moves with the
+# seat that called, so `layout.PAYOUT_MELD` -- pinned by two captures that turn out to be the
+# same caller -- locates a right-seat meld and nothing else.
+
+def test_a_row_of_cards_is_located_without_being_told_their_size():
+    region = row_of([card(1, "blue"), card(2, "pink"), card(3, "orange")])
+    spans = frame_spans(region)
+
+    assert len(spans) == 1
+    x0, x1, y0, y1 = spans[0]
+    # The three cards sit inside a 24px margin, so the span covers most of the region.
+    assert 0.0 < x0 < 0.12 and 0.88 < x1 <= 1.0
+    assert 0.0 < y0 < 0.20 and 0.80 < y1 <= 1.0
+
+
+def test_bare_felt_holds_no_cards():
+    felt = np.zeros((200, 600, 3), dtype=np.uint8)
+    felt[:, :] = FELT
+    assert frame_spans(felt) == ()
+
+
+def test_the_payout_panels_are_not_mistaken_for_cards():
+    """The middle of the table is full of things that are not felt: the deck pile, the decoy
+    card list, the near-white payout panels, and the game-over banner. Keying on "not felt"
+    would return all of them; only cards are strongly blue, orange or pink."""
+    region = np.zeros((200, 600, 3), dtype=np.uint8)
+    region[:, :] = FELT
+    region[40:160, 60:300] = 244          # a payout panel
+    region[40:160, 340:560] = (90, 90, 95)   # a card back / grey tile
+    assert frame_spans(region) == ()
+
+
+def test_two_separated_cards_are_two_spans():
+    region = row_of([card(1, "blue"), card(2, "pink")], gap_after=0, gap=2.0)
+    assert len(frame_spans(region)) == 2
+
+
+# ------------------------------------------------- narrowing and diagnosing ---
+#
+# A round the reader could not advise on at all turned on both of these: `amelia_watson` at
+# 0.42 against a 0.45 floor on 68 of 86 frames, refused every time, with the log recording only
+# the score. The margin is the number this module says carries the decision, and it was the one
+# number the refusal threw away.
+
+def test_a_refusal_on_score_still_reports_the_margin():
+    """Without it a log says "only scored 0.42" on every frame of a round and there is no way
+    to tell a correct read sitting under the floor from a coin-flip."""
+    catalogue = TemplateSet({"a": [prepare(card(1))], "b": [prepare(card(2))]})
+
+    match = catalogue.identify(np.full((160, 115, 3), 128, dtype=np.uint8))
+
+    assert match.character is None
+    assert "margin" in match.reason
+
+
+def test_a_refusal_still_names_its_best_match():
+    """A refusal is not the same as no information: the bonus card is the same card on every
+    frame, so many sub-threshold reads naming one holomem are evidence no single frame is."""
+    catalogue = TemplateSet({"a": [prepare(card(1))], "b": [prepare(card(2))]})
+
+    match = catalogue.identify(np.full((160, 115, 3), 128, dtype=np.uint8))
+
+    assert match.character is None and match.best in {"a", "b"}
+
+
+def test_restricting_to_the_roster_cannot_change_a_confident_answer():
+    """It removes candidates, so the winner either survives or there is no winner. What it
+    changes is the margin, by taking away runner-ups the round could never have dealt."""
+    art = {name: [prepare(card(seed))] for seed, name in enumerate("abcde", start=1)}
+    catalogue = TemplateSet(art)
+    query = card(3)
+
+    everyone = catalogue.identify(query)
+    subset = catalogue.identify(query, among=["a", "c", "e"])
+
+    assert everyone.character == subset.character
+    assert subset.margin >= everyone.margin
+
+
+def test_a_roster_with_no_art_at_all_refuses_rather_than_ranking_nothing():
+    catalogue = TemplateSet({"a": [prepare(card(1))]})
+
+    match = catalogue.identify(card(1), among=["someone_else"])
+
+    assert match.character is None and "roster" in match.reason
+
+
+def test_the_letterbox_boundary_is_exact_on_a_frame_big_enough_to_be_strided():
+    """Every row and column is still tested; only the pixels *within* them are sampled.
+
+    The distinction is the whole point of the optimisation and is invisible on a small
+    synthetic frame, where the stride is 1 and nothing is skipped. At full resolution this ran
+    on every poll for 178 ms, which is most of why a live round managed 2.2 seconds between
+    frames -- but subsampling the rows and columns as well would round the boundary to the
+    stride, and every region below is a fraction of it.
+
+    Bars of 11 rather than a round number precisely so a rounded boundary shows up.
+    """
+    bar = 11
+    frame = np.zeros((718 + 2 * bar, 1280, 3), dtype=np.uint8)
+    frame[bar:-bar] = (40, 120, 40)          # felt between the bars
+
+    area = find_play_area(frame)
+
+    assert area is not None
+    assert (area.y, area.height) == (bar, 718)
+    assert (area.x, area.width) == (0, 1280)
